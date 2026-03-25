@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+}
+
+model User {
+  id              String             @id @default(cuid())
+  clerkId         String             @unique
+  email           String             @unique
+  name            String?
+  creditBalance   Int                @default(0)
+  lifetimeFreeAI  Int                @default(0)
+  images          Image[]
+  transactions    CreditTransaction[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+}
+
+model Image {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id])
+  filename    String
+  originalUrl String
+  publicId    String
+  width       Int
+  height      Int
+  size        Int
+  format      String
+  embedding   Float[]
+  metadata    Json?
+  versions    ImageVersion[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model ImageVersion {
+  id          String   @id @default(cuid())
+  imageId     String
+  image       Image    @relation(fields: [imageId], references: [id])
+  url         String
+  publicId    String
+  adjustments Json
+  label       String?
+  createdAt   DateTime @default(now())
+}
+
+model CreditTransaction {
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  type        TransactionType
+  amount      Int             // positive = added, negative = deducted
+  feature     String?         // e.g. "auto_enhance", "remove_background"
+  bundleId    String?         // which bundle was purchased
+  stripeId    String?         // Stripe payment intent or session ID
+  description String?
+  createdAt   DateTime        @default(now())
+}
+
+model CreditBundle {
+  id          String   @id @default(cuid())
+  name        String   // "Starter", "Basic", "Pro", etc.
+  credits     Int      // how many credits it gives
+  price       Int      // in cents, e.g. 500 = $5.00
+  stripePriceId String // the price ID from Stripe
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+enum TransactionType {
+  PURCHASE    // user bought credits
+  DEDUCTION   // credits spent on AI feature
+  REFUND      // credits returned on failure
+  BONUS       // free credits granted
+}
