@@ -1,0 +1,28 @@
+# Redux — Dev Notes
+
+## Current Phase
+Phase 5 — Library Page UI
+
+## Completed
+- Next.js project setup
+- Prisma schema with User, Image, ImageVersion, CreditTransaction, CreditBundle
+- Clerk authentication and webhook syncing users to database
+- Cloudinary utility functions
+- UploadThing file router
+- Credit bundles seeded to database
+
+## Environment Variables
+- .env — Prisma/server use
+- .env.local — Next.js app use
+- Both files need all variables
+
+## Known Issues / Notes
+- ngrok needed for local webhook testing (run in Mac terminal)
+- pnpm dev runs in Cursor terminal
+- Prisma Studio at localhost:5555
+
+## Decisions Made
+- Credit-based monetization, no subscriptions
+- Folder in Cloudinary called 'redux'
+- 20 lifetime free AI messages for chat assistant
+```

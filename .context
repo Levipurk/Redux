@@ -1,4 +1,4 @@
-# Redux Studio — AI Photo Editor
+# Redux — AI Photo Editor
 
 ## Project Overview
 Redux is a browser-based AI-powered photo editing application built with Next.js 14 App Router and TypeScript. Users can upload photos, edit them with adjustment tools, and use AI features powered by Anthropic and Replicate. The app uses a credit-based monetization system where AI features cost credits that users purchase via Stripe.
