@@ -32,6 +32,7 @@ model Image {
   height      Int
   size        Int
   format      String
+  utKey       String?
   embedding   Float[]
   metadata    Json?
   versions    ImageVersion[]

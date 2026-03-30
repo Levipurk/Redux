@@ -1,6 +1,9 @@
 import { auth } from "@clerk/nextjs/server";
 import { type NextRequest, NextResponse } from "next/server";
+import { UTApi } from "uploadthing/server";
 import { prisma } from "@/lib/prisma";
+
+const utapi = new UTApi({ token: process.env.UPLOADTHING_TOKEN });
 
 export async function GET(request: NextRequest) {
   const { userId: clerkId } = await auth();
@@ -29,6 +32,7 @@ export async function GET(request: NextRequest) {
         filename: true,
         originalUrl: true,
         publicId: true,
+        utKey: true,
         width: true,
         height: true,
         size: true,
@@ -54,8 +58,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const body = await request.json() as { ufsUrl?: string; name?: string; size?: number };
-  const { ufsUrl, name, size } = body;
+  const body = await request.json() as { ufsUrl?: string; utKey?: string; name?: string; size?: number };
+  const { ufsUrl, utKey, name, size } = body;
   if (!ufsUrl || !name || size == null) {
     return NextResponse.json({ error: "ufsUrl, name, and size are required" }, { status: 400 });
   }
@@ -73,6 +77,7 @@ export async function POST(request: NextRequest) {
       filename: name,
       originalUrl: secureUrl,
       publicId,
+      utKey: utKey ?? null,
       width,
       height,
       size,
@@ -106,6 +111,10 @@ export async function DELETE(request: NextRequest) {
   });
   if (!image) {
     return NextResponse.json({ error: "Image not found" }, { status: 404 });
+  }
+
+  if (image.utKey) {
+    await utapi.deleteFiles(image.utKey);
   }
 
   const { deleteFromCloudinary } = await import("@/lib/cloudinary");

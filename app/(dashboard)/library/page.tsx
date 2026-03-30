@@ -54,13 +54,21 @@ export default function LibraryPage() {
     fetchImages();
   }, [fetchImages]);
 
+  const handleDeleteImage = useCallback((id: string) => {
+    setImages((prev) => prev.filter((img) => img.id !== id));
+  }, []);
+
   const groups = groupImagesByMonth(images);
 
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0a] overflow-hidden">
       <Header onUploadComplete={fetchImages} />
       <main className="flex flex-col flex-1 min-h-0 overflow-y-auto">
-        <PhotoGrid groups={groups} loading={loading} />
+        <PhotoGrid
+          groups={groups}
+          loading={loading}
+          onDeleteImage={handleDeleteImage}
+        />
       </main>
       <BottomNav />
     </div>

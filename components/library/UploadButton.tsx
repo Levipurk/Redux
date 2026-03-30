@@ -32,6 +32,7 @@ export default function UploadButton({ onUploadComplete }: UploadButtonProps) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               ufsUrl: uploaded.ufsUrl,
+              utKey: uploaded.key,
               name: uploaded.name,
               size: uploaded.size,
             }),

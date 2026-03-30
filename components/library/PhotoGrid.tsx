@@ -6,6 +6,7 @@ import PhotoCard from "./PhotoCard";
 interface PhotoGridProps {
   groups: ImageGroup[];
   loading?: boolean;
+  onDeleteImage?: (id: string) => void;
 }
 
 function SkeletonGrid() {
@@ -28,7 +29,7 @@ function SkeletonGrid() {
   );
 }
 
-export default function PhotoGrid({ groups, loading }: PhotoGridProps) {
+export default function PhotoGrid({ groups, loading, onDeleteImage }: PhotoGridProps) {
   if (loading) {
     return (
       <div className="px-5 py-4">
@@ -57,7 +58,7 @@ export default function PhotoGrid({ groups, loading }: PhotoGridProps) {
             </p>
             <div className="grid grid-cols-5 gap-[6px]">
               {group.images.map((image) => (
-                <PhotoCard key={image.id} image={image} />
+                <PhotoCard key={image.id} image={image} onDelete={onDeleteImage} />
               ))}
             </div>
           </div>
