@@ -46,5 +46,5 @@ next-env.d.ts
 /.clerk/
 
 # context
-.cursorrules
-NOTES.md
+.context
+.devnotes

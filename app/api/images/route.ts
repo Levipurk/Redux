@@ -1,7 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { deleteFromCloudinary } from "@/lib/cloudinary";
 
 export async function GET(request: NextRequest) {
   const { userId: clerkId } = await auth();
@@ -11,7 +10,7 @@ export async function GET(request: NextRequest) {
 
   const user = await prisma.user.findUnique({ where: { clerkId } });
   if (!user) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
+    return NextResponse.json({ images: [], total: 0, page: 1, limit: 50 });
   }
 
   const { searchParams } = new URL(request.url);
@@ -44,6 +43,47 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ images, total, page, limit });
 }
 
+export async function POST(request: NextRequest) {
+  const { userId: clerkId } = await auth();
+  if (!clerkId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const user = await prisma.user.findUnique({ where: { clerkId } });
+  if (!user) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const body = await request.json() as { ufsUrl?: string; name?: string; size?: number };
+  const { ufsUrl, name, size } = body;
+  if (!ufsUrl || !name || size == null) {
+    return NextResponse.json({ error: "ufsUrl, name, and size are required" }, { status: 400 });
+  }
+
+  const response = await fetch(ufsUrl);
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  const { uploadToCloudinary } = await import("@/lib/cloudinary");
+  const { secureUrl, publicId, width, height, format } = await uploadToCloudinary(buffer, name);
+
+  const image = await prisma.image.create({
+    data: {
+      userId: user.id,
+      filename: name,
+      originalUrl: secureUrl,
+      publicId,
+      width,
+      height,
+      size,
+      format,
+      embedding: [],
+    },
+  });
+
+  return NextResponse.json({ image });
+}
+
 export async function DELETE(request: NextRequest) {
   const { userId: clerkId } = await auth();
   if (!clerkId) {
@@ -68,6 +108,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Image not found" }, { status: 404 });
   }
 
+  const { deleteFromCloudinary } = await import("@/lib/cloudinary");
   await deleteFromCloudinary(image.publicId);
   await prisma.image.delete({ where: { id: imageId } });
 

@@ -1,48 +1,40 @@
 import { createUploadthing, type FileRouter } from "uploadthing/next";
-import { auth } from "@clerk/nextjs/server";
-import { uploadToCloudinary } from "@/lib/cloudinary";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 
 const f = createUploadthing();
 
 export const ourFileRouter = {
-  imageUploader: f({
-    "image/jpeg": { maxFileSize: "32MB", maxFileCount: 1 },
-    "image/png": { maxFileSize: "32MB", maxFileCount: 1 },
-    "image/tiff": { maxFileSize: "32MB", maxFileCount: 1 },
-  })
+  // awaitServerData: false lets onClientUploadComplete fire immediately after
+  // the CDN upload, without waiting for a server webhook callback (which can't
+  // reach localhost in dev). The Cloudinary upload + Prisma save are triggered
+  // by the client via POST /api/images after onClientUploadComplete fires.
+  imageUploader: f(
+    {
+      "image/jpeg": { maxFileSize: "32MB", maxFileCount: 1 },
+      "image/png": { maxFileSize: "32MB", maxFileCount: 1 },
+      "image/tiff": { maxFileSize: "32MB", maxFileCount: 1 },
+    },
+    { awaitServerData: false },
+  )
     .middleware(async () => {
       const { userId: clerkId } = await auth();
       if (!clerkId) throw new Error("Unauthorized");
 
-      const user = await prisma.user.findUnique({ where: { clerkId } });
-      if (!user) throw new Error("User not found");
+      const clerkUser = await currentUser();
+      const email = clerkUser?.emailAddresses[0]?.emailAddress ?? "";
+      const name = clerkUser?.fullName ?? null;
+
+      const user = await prisma.user.upsert({
+        where: { clerkId },
+        update: {},
+        create: { clerkId, email, name },
+      });
 
       return { userId: user.id };
     })
-    .onUploadComplete(async ({ metadata, file }) => {
-      const response = await fetch(file.ufsUrl);
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      const { secureUrl, publicId, width, height, format } =
-        await uploadToCloudinary(buffer, file.name);
-
-      await prisma.image.create({
-        data: {
-          userId: metadata.userId,
-          filename: file.name,
-          originalUrl: secureUrl,
-          publicId,
-          width,
-          height,
-          size: file.size,
-          format,
-          embedding: [],
-        },
-      });
-
-      return { url: secureUrl, publicId };
+    .onUploadComplete(() => {
+      // Intentionally empty — processing happens via POST /api/images
     }),
 } satisfies FileRouter;
 
