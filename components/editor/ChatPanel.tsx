@@ -1,15 +1,29 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Minus, Paperclip } from "lucide-react";
+import { ArrowUp, Minus, Paperclip, X } from "lucide-react";
+import toast from "react-hot-toast";
 import type { Adjustments } from "@/hooks/useEditor";
 import type { AdjustmentKey } from "@/constants/adjustments";
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 interface Message {
   id: string;
   role: "user" | "assistant";
+  /** Cleaned display text (adjustment tags stripped). */
   content: string;
+  /** Base64 data-URL thumbnail for images sent by the user. */
+  imagePreview?: string;
+  timestamp: Date;
 }
+
+type SseEvent =
+  | { type: "meta"; freeRemaining: number }
+  | { type: "text"; text: string }
+  | { type: "adjustments"; adjustments: Partial<Record<AdjustmentKey, number>> }
+  | { type: "done" };
 
 interface ChatPanelProps {
   adjustments: Adjustments;
@@ -17,6 +31,42 @@ interface ChatPanelProps {
   imageId?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Strip [adjustments]...[/adjustments] from displayed text. */
+function cleanText(raw: string): string {
+  return raw.replace(/\[adjustments\][\s\S]*?\[\/adjustments\]/g, "").trim();
+}
+
+function formatTime(d: Date): string {
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Convert a File to a base64 data-URL (for preview) and the raw base64 string
+ * (for the API payload, without the `data:...;base64,` prefix).
+ */
+async function fileToBase64(
+  file: File,
+): Promise<{ dataUrl: string; base64: string; mediaType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const [header, base64] = dataUrl.split(",");
+      const mediaType = header.replace("data:", "").replace(";base64", "");
+      resolve({ dataUrl, base64, mediaType });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 export default function ChatPanel({
   adjustments,
   onPatch,
@@ -25,102 +75,149 @@ export default function ChatPanel({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+
+  // Attached image state
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedPreview, setAttachedPreview] = useState<string | null>(null);
+  const [attachedBase64, setAttachedBase64] = useState<string | null>(null);
+  const [attachedMediaType, setAttachedMediaType] = useState<string | null>(null);
+
+  // Free messages remaining (populated from SSE meta event)
+  const [freeRemaining, setFreeRemaining] = useState<number | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom when messages grow
+  // Auto-scroll to bottom when messages change
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  // ── File attachment ─────────────────────────────────────────────────────
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = "";
+    if (!file) return;
+
+    setAttachedFile(file);
+    try {
+      const { dataUrl, base64, mediaType } = await fileToBase64(file);
+      setAttachedPreview(dataUrl);
+      setAttachedBase64(base64);
+      setAttachedMediaType(mediaType);
+    } catch {
+      toast.error("Could not read the image file.");
+      setAttachedFile(null);
+    }
+  }
+
+  function clearAttachment() {
+    setAttachedFile(null);
+    setAttachedPreview(null);
+    setAttachedBase64(null);
+    setAttachedMediaType(null);
+  }
+
+  // ── Send message ────────────────────────────────────────────────────────
   async function handleSend() {
     const text = input.trim();
     if (!text || sending) return;
 
-    const userMessage: Message = {
+    const imagePreview = attachedPreview ?? undefined;
+    const imageBase64 = attachedBase64 ?? undefined;
+    const imageMediaType = attachedMediaType ?? undefined;
+
+    // Add user message to thread
+    const userMsg: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: text,
+      imagePreview,
+      timestamp: new Date(),
     };
-
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    clearAttachment();
     setSending(true);
 
-    // Optimistic placeholder for assistant response
+    // Optimistic assistant placeholder
     const assistantId = crypto.randomUUID();
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", content: "" },
-    ]);
+    const assistantPlaceholder: Message = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, assistantPlaceholder]);
 
     try {
-      const response = await fetch("/api/ai/chat", {
+      const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: text,
+          userMessage: text,
           adjustments,
           imageId,
+          imageBase64,
+          imageMediaType,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      if (res.status === 402) {
+        toast("Insufficient credits — purchase more to continue.", {
+          icon: "💳",
+          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+        });
+        // Remove the empty placeholder
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        return;
       }
 
-      const contentType = response.headers.get("content-type") ?? "";
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      if (contentType.includes("text/event-stream") || contentType.includes("text/plain")) {
-        // Streaming response — read chunks as they arrive
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let accumulated = "";
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) throw new Error("No response body");
 
-        if (reader) {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            accumulated += decoder.decode(value, { stream: true });
+      let rawBuffer = ""; // accumulates partial SSE lines
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        rawBuffer += decoder.decode(value, { stream: true });
+
+        // Process complete SSE lines (each ends with \n\n)
+        const lines = rawBuffer.split("\n\n");
+        rawBuffer = lines.pop() ?? ""; // keep the incomplete last chunk
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const jsonStr = line.slice(6); // strip "data: "
+          let event: SseEvent;
+          try {
+            event = JSON.parse(jsonStr) as SseEvent;
+          } catch {
+            continue;
+          }
+
+          if (event.type === "meta") {
+            setFreeRemaining(event.freeRemaining);
+          } else if (event.type === "text") {
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantId ? { ...m, content: accumulated } : m,
+                m.id === assistantId
+                  ? { ...m, content: cleanText(m.content + event.text) }
+                  : m,
               ),
             );
+          } else if (event.type === "adjustments") {
+            onPatch(event.adjustments as Partial<Adjustments>);
           }
+          // "done" — nothing extra needed, the outer loop will finish
         }
-
-        // Try to extract JSON adjustments from a terminal marker
-        const match = accumulated.match(/```json\s*([\s\S]*?)```/);
-        if (match) {
-          try {
-            const data = JSON.parse(match[1]) as {
-              adjustments?: Partial<Record<AdjustmentKey, number>>;
-            };
-            if (data.adjustments) onPatch(data.adjustments);
-          } catch {
-            // Not valid JSON, ignore
-          }
-        }
-      } else {
-        // Standard JSON response
-        const data = (await response.json()) as {
-          message?: string;
-          adjustments?: Partial<Record<AdjustmentKey, number>>;
-        };
-
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, content: data.message ?? "Done." }
-              : m,
-          ),
-        );
-
-        if (data.adjustments) onPatch(data.adjustments);
       }
     } catch (err) {
       console.error("[ChatPanel] send error:", err);
@@ -133,7 +230,6 @@ export default function ChatPanel({
       );
     } finally {
       setSending(false);
-      setAttachedFile(null);
     }
   }
 
@@ -144,6 +240,7 @@ export default function ChatPanel({
     }
   }
 
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col w-[320px] shrink-0 h-full bg-[#111111] border-l border-[#2a2a2a]">
       {/* Panel header */}
@@ -159,8 +256,9 @@ export default function ChatPanel({
       {/* Message thread */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto min-h-0 px-4 py-4 flex flex-col gap-4 [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-track]:bg-[#111111] [&::-webkit-scrollbar-thumb]:bg-[#2a2a2a] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb:hover]:bg-[#3a3a3a]"
+        className="flex-1 overflow-y-auto min-h-0 px-4 py-4 flex flex-col gap-3 [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-track]:bg-[#111111] [&::-webkit-scrollbar-thumb]:bg-[#2a2a2a] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb:hover]:bg-[#3a3a3a]"
       >
+        {/* Empty state */}
         {messages.length === 0 && (
           <div className="flex-1 flex items-center justify-center">
             <p className="text-[13px] text-[#444444] text-center select-none leading-relaxed px-2">
@@ -172,49 +270,89 @@ export default function ChatPanel({
         {messages.map((msg) => (
           <div
             key={msg.id}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            className={`flex flex-col gap-[4px] ${msg.role === "user" ? "items-end" : "items-start"}`}
           >
+            {/* Image thumbnail (user messages only) */}
+            {msg.imagePreview && (
+              <div className="mb-1">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={msg.imagePreview}
+                  alt="Attached reference"
+                  className="max-w-[140px] max-h-[100px] rounded-sm object-cover border border-[#2a2a2a]"
+                />
+              </div>
+            )}
+
+            {/* Bubble */}
             <div
-              className={`max-w-[220px] rounded-sm px-[11px] py-[8px] text-[13px] leading-relaxed ${
+              className={`max-w-[236px] rounded-sm px-[11px] py-[8px] text-[13px] leading-relaxed whitespace-pre-wrap break-words ${
                 msg.role === "user"
                   ? "bg-white text-black"
                   : "bg-[#1a1a1a] border border-[#2a2a2a] text-[#e5e5e5]"
               }`}
             >
-              {msg.content || (
-                <span className="inline-flex gap-[3px] items-center">
+              {/* Loading dots when assistant placeholder is empty */}
+              {msg.content === "" && msg.role === "assistant" ? (
+                <span className="inline-flex gap-[4px] items-center py-[2px]">
                   <span className="w-[4px] h-[4px] rounded-full bg-[#555555] animate-bounce [animation-delay:0ms]" />
                   <span className="w-[4px] h-[4px] rounded-full bg-[#555555] animate-bounce [animation-delay:150ms]" />
                   <span className="w-[4px] h-[4px] rounded-full bg-[#555555] animate-bounce [animation-delay:300ms]" />
                 </span>
+              ) : (
+                msg.content
               )}
             </div>
+
+            {/* Timestamp */}
+            <span className="text-[10px] text-[#444444] px-[2px] select-none">
+              {formatTime(msg.timestamp)}
+            </span>
           </div>
         ))}
       </div>
 
-      {/* Attached file indicator */}
-      {attachedFile && (
-        <div className="px-4 pb-1">
-          <div className="flex items-center gap-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-sm px-2 py-1">
-            <Paperclip size={10} className="text-[#888888] shrink-0" />
-            <span className="text-[10px] text-[#888888] truncate">{attachedFile.name}</span>
+      {/* Image thumbnail preview above input */}
+      {attachedPreview && (
+        <div className="px-4 pb-2">
+          <div className="relative inline-block">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={attachedPreview}
+              alt="Attached"
+              className="h-[56px] w-auto max-w-[100px] rounded-sm object-cover border border-[#2a2a2a]"
+            />
             <button
-              onClick={() => setAttachedFile(null)}
-              className="ml-auto text-[#555555] hover:text-[#888888] shrink-0"
+              onClick={clearAttachment}
+              className="absolute -top-[6px] -right-[6px] w-[16px] h-[16px] rounded-full bg-[#333333] border border-[#555555] flex items-center justify-center text-[#aaaaaa] hover:text-white hover:bg-[#444444] transition-colors"
             >
-              ×
+              <X size={9} strokeWidth={2.5} />
             </button>
           </div>
+          {attachedFile && (
+            <p className="text-[10px] text-[#555555] mt-[3px] truncate max-w-[200px]">
+              {attachedFile.name}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Free messages counter */}
+      {freeRemaining !== null && freeRemaining > 0 && (
+        <div className="px-4 pb-1">
+          <p className="text-[11px] text-[#444444]">
+            {freeRemaining} free message{freeRemaining !== 1 ? "s" : ""} remaining
+          </p>
         </div>
       )}
 
       {/* Input area */}
-      <div className="px-4 pb-4 pt-3 shrink-0">
+      <div className="px-4 pb-4 pt-2 shrink-0">
         <div className="flex items-end gap-[8px] bg-[#111111] border border-[#2a2a2a] rounded-sm px-3 py-[8px]">
           {/* Paperclip */}
           <button
             onClick={() => fileInputRef.current?.click()}
+            title="Attach reference image"
             className="shrink-0 text-[#555555] hover:text-[#888888] transition-colors self-end pb-[1px]"
           >
             <Paperclip size={15} strokeWidth={1.5} />
@@ -224,28 +362,26 @@ export default function ChatPanel({
             type="file"
             accept="image/*"
             className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              setAttachedFile(f);
-              e.target.value = "";
-            }}
+            onChange={(e) => { void handleFileChange(e); }}
           />
 
           {/* Textarea */}
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Describe the edits you want or ask for help..."
             rows={1}
-            className="flex-1 resize-none bg-transparent text-[13px] text-white placeholder:text-[#888888] outline-none leading-relaxed min-h-[20px] max-h-[80px] overflow-y-auto"
+            className="flex-1 resize-none bg-transparent text-[13px] text-white placeholder:text-[#555555] outline-none leading-relaxed min-h-[20px] max-h-[80px] overflow-y-auto"
             style={{ fieldSizing: "content" } as React.CSSProperties}
           />
 
           {/* Send */}
           <button
-            onClick={() => void handleSend()}
+            onClick={() => { void handleSend(); }}
             disabled={!input.trim() || sending}
+            title="Send"
             className="shrink-0 flex items-center justify-center w-[24px] h-[24px] rounded-full bg-white text-black hover:bg-[#e5e5e5] transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer self-end"
           >
             <ArrowUp size={13} strokeWidth={2.5} />
