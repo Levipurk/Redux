@@ -6,16 +6,11 @@ import { prisma } from "@/lib/prisma";
 import type { AdjustmentKey } from "@/constants/adjustments";
 
 const SYSTEM_PROMPT =
-  "You are an expert photo editor. Analyze this image and return optimal adjustment values " +
-  "to enhance it. Consider the exposure, white balance, contrast, and color. Return ONLY a " +
-  "JSON object with adjustment values, no explanation. Available adjustments: brightness, " +
-  "exposure, contrast, blacks, whites, highlights, shadows, vibrance, saturation, temperature, " +
-  "tint. All values range from -100 to 100. Only include adjustments that need to change from 0.";
+  "You are an expert photo editor. Analyze this image and return optimal tone adjustments only. " +
+  "Focus specifically on exposure, contrast, highlights, shadows, blacks, and whites to achieve " +
+  "a well-balanced tone. Return ONLY a JSON object with these adjustment values, no explanation. " +
+  "Values range from -100 to 100. Only include adjustments that need to change from 0.";
 
-/**
- * Insert a w_400,q_70,f_jpg transformation into a Cloudinary upload URL so we
- * fetch a small JPEG thumbnail instead of the full-res image.
- */
 function toThumbnailUrl(url: string): string {
   return url.replace("/upload/", "/upload/w_400,q_70,f_jpg/");
 }
@@ -56,12 +51,11 @@ export async function POST(request: Request) {
       userId: user.id,
       type: "DEDUCTION",
       amount: -1,
-      feature: "auto_enhance",
+      feature: "auto_tone_balance",
     },
   });
 
   try {
-    // Fetch the thumbnail from Cloudinary
     const thumbnailUrl = toThumbnailUrl(imageUrl);
     const imageRes = await fetch(thumbnailUrl);
     if (!imageRes.ok) {
@@ -77,7 +71,7 @@ export async function POST(request: Request) {
       },
       {
         type: "text",
-        text: "Analyze this image and return optimal adjustment values to enhance it.",
+        text: "Analyze this image and return optimal tone adjustment values.",
       },
     ];
 
@@ -91,15 +85,13 @@ export async function POST(request: Request) {
     const rawText =
       response.content[0]?.type === "text" ? response.content[0].text : "";
 
-    // Strip markdown code fences if the model wraps its JSON
     const cleaned = rawText.replace(/```(?:json)?\n?/g, "").replace(/```/g, "").trim();
 
     let adjustments: Partial<Record<AdjustmentKey, number>> = {};
     try {
       adjustments = JSON.parse(cleaned) as Partial<Record<AdjustmentKey, number>>;
     } catch {
-      console.error("[/api/ai/enhance] Failed to parse JSON response:", rawText);
-      // Refund on parse failure
+      console.error("[/api/ai/tone] Failed to parse JSON response:", rawText);
       await prisma.user.update({
         where: { id: user.id },
         data: { creditBalance: { increment: 1 } },
@@ -109,8 +101,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ adjustments });
   } catch (err) {
-    console.error("[/api/ai/enhance] Error:", err);
-    // Refund credit on unexpected failure
+    console.error("[/api/ai/tone] Error:", err);
     await prisma.user.update({
       where: { id: user.id },
       data: { creditBalance: { increment: 1 } },

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Minus, ChevronDown, Star, Lock, Unlock } from "lucide-react";
+import toast from "react-hot-toast";
 import AdjustmentSlider from "./AdjustmentSlider";
 import type { AdjustmentKey } from "@/constants/adjustments";
 import type { Adjustments } from "@/hooks/useEditor";
@@ -11,6 +12,7 @@ interface AdjustmentPanelProps {
   onPreview: (key: AdjustmentKey, value: number) => void;
   onCommit: (key: AdjustmentKey, value: number) => void;
   imageId?: string;
+  imageUrl?: string | null;
   imageWidth?: number;
   imageHeight?: number;
   // Canvas transform callbacks
@@ -88,17 +90,19 @@ function SectionHeader({
 function AIButton({
   label,
   loading,
+  disabled,
   onClick,
 }: {
   label: string;
   loading: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      disabled={loading}
-      className="flex items-center justify-center gap-[7px] w-full h-[34px] bg-[#1a1a1a] border border-[#2a2a2a] rounded-sm text-[13px] text-white hover:bg-[#222222] transition-colors disabled:opacity-50 cursor-pointer"
+      disabled={loading || disabled}
+      className="flex items-center justify-center gap-[7px] w-full h-[34px] bg-[#1a1a1a] border border-[#2a2a2a] rounded-sm text-[13px] text-white hover:bg-[#222222] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
     >
       <Star size={13} strokeWidth={1.5} />
       {loading ? "Working…" : label}
@@ -138,6 +142,7 @@ export default function AdjustmentPanel({
   onPreview,
   onCommit,
   imageId,
+  imageUrl,
   imageWidth,
   imageHeight,
   onCrop,
@@ -210,35 +215,81 @@ export default function AdjustmentPanel({
     setActiveTool((prev) => (prev === tool ? null : tool));
   }
 
-  // Generic AI enhancement caller
-  async function callEnhance(
-    mode: string,
-    setLoading: (v: boolean) => void,
-  ) {
-    if (!imageId) return;
-    setLoading(true);
+  // ── Auto Enhance ──────────────────────────────────────────────────────────
+  async function runAutoEnhance() {
+    if (!imageUrl) return;
+    setLoadingEnhance(true);
     try {
       const res = await fetch("/api/ai/enhance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageId, mode }),
+        body: JSON.stringify({ imageUrl, currentAdjustments: adjustments }),
       });
-      if (res.ok) {
-        const data = (await res.json()) as { adjustments?: Partial<Adjustments> };
-        if (data.adjustments) {
-          (Object.entries(data.adjustments) as [AdjustmentKey, number][]).forEach(
-            ([key, value]) => onCommit(key, value),
-          );
-        }
+      if (res.status === 402) {
+        toast("Insufficient credits — purchase more to continue.", {
+          icon: "💳",
+          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+        });
+        return;
       }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { adjustments?: Partial<Record<AdjustmentKey, number>> };
+      if (data.adjustments) {
+        (Object.entries(data.adjustments) as [AdjustmentKey, number][]).forEach(
+          ([key, value]) => onCommit(key, value),
+        );
+      }
+      toast.success("Auto Enhance applied", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
     } catch (err) {
-      console.error(`[AdjustmentPanel] ${mode} failed:`, err);
+      console.error("[AdjustmentPanel] auto_enhance failed:", err);
+      toast.error("Auto Enhance failed", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
     } finally {
-      setLoading(false);
+      setLoadingEnhance(false);
     }
   }
 
-  // Generic AI retouch caller (remove_background, generative_fill)
+  // ── Auto Tone Balance ─────────────────────────────────────────────────────
+  async function runAutoToneBalance() {
+    if (!imageUrl) return;
+    setLoadingToneBalance(true);
+    try {
+      const res = await fetch("/api/ai/tone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl, currentAdjustments: adjustments }),
+      });
+      if (res.status === 402) {
+        toast("Insufficient credits — purchase more to continue.", {
+          icon: "💳",
+          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+        });
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { adjustments?: Partial<Record<AdjustmentKey, number>> };
+      if (data.adjustments) {
+        (Object.entries(data.adjustments) as [AdjustmentKey, number][]).forEach(
+          ([key, value]) => onCommit(key, value),
+        );
+      }
+      toast.success("Auto Tone Balance applied", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+    } catch (err) {
+      console.error("[AdjustmentPanel] auto_tone_balance failed:", err);
+      toast.error("Auto Tone Balance failed", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+    } finally {
+      setLoadingToneBalance(false);
+    }
+  }
+
+  // ── Generic placeholder for unimplemented AI features ─────────────────────
   async function callRetouch(
     mode: string,
     setLoading: (v: boolean) => void,
@@ -294,12 +345,14 @@ export default function AdjustmentPanel({
               <AIButton
                 label="Auto Enhance"
                 loading={loadingEnhance}
-                onClick={() => void callEnhance("auto_enhance", setLoadingEnhance)}
+                disabled={!imageUrl}
+                onClick={() => void runAutoEnhance()}
               />
               <AIButton
                 label="Auto Tone Balance"
                 loading={loadingToneBalance}
-                onClick={() => void callEnhance("auto_tone_balance", setLoadingToneBalance)}
+                disabled={!imageUrl}
+                onClick={() => void runAutoToneBalance()}
               />
             </div>
           </div>
@@ -326,12 +379,14 @@ export default function AdjustmentPanel({
               <AIButton
                 label="Smart Color Balance"
                 loading={loadingSmartColor}
-                onClick={() => void callEnhance("smart_color_balance", setLoadingSmartColor)}
+                disabled={!imageUrl}
+                onClick={() => void callRetouch("smart_color_balance", setLoadingSmartColor)}
               />
               <AIButton
                 label="Style Match"
                 loading={loadingStyleMatch}
-                onClick={() => void callEnhance("style_match", setLoadingStyleMatch)}
+                disabled={!imageUrl}
+                onClick={() => void callRetouch("style_match", setLoadingStyleMatch)}
               />
             </div>
           </div>
@@ -497,11 +552,13 @@ export default function AdjustmentPanel({
             <AIButton
               label="Generative Fill"
               loading={loadingGenFill}
+              disabled={!imageUrl}
               onClick={() => void callRetouch("generative_fill", setLoadingGenFill)}
             />
             <AIButton
               label="Remove Background"
               loading={loadingRemoveBg}
+              disabled={!imageUrl}
               onClick={() => void callRetouch("remove_background", setLoadingRemoveBg)}
             />
           </div>

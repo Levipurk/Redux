@@ -105,6 +105,7 @@ export default function EditorApp() {
           onPreview={previewAdjustment}
           onCommit={updateAdjustment}
           imageId={imageId}
+          imageUrl={image?.originalUrl ?? null}
           imageWidth={image?.width ?? undefined}
           imageHeight={image?.height ?? undefined}
           onCrop={startCrop}
