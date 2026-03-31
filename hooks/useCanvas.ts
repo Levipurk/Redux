@@ -60,9 +60,11 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
         renderOnAddRemove: false,
       });
 
-      // Size the canvas to match the element's layout dimensions
-      canvas.setWidth(el.offsetWidth || 800);
-      canvas.setHeight(el.offsetHeight || 600);
+      // Fabric v7 removed setWidth/setHeight — use setDimensions instead
+      canvas.setDimensions({
+        width: el.offsetWidth || 800,
+        height: el.offsetHeight || 600,
+      });
 
       fabricRef.current = canvas;
       setCanvasReady(true);
