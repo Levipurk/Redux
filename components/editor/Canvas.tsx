@@ -1,15 +1,11 @@
 "use client";
 
-import { useCanvas, type CanvasAdjustments } from "@/hooks/useCanvas";
-
 interface CanvasProps {
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
   imageUrl: string | null;
-  adjustments: CanvasAdjustments;
 }
 
-export default function Canvas({ imageUrl, adjustments }: CanvasProps) {
-  const { canvasRef } = useCanvas(imageUrl, adjustments);
-
+export default function Canvas({ canvasRef, imageUrl }: CanvasProps) {
   return (
     <div className="relative flex-1 bg-[#0a0a0a] overflow-hidden flex items-center justify-center">
       {/* Fabric canvas — always mounted so the hook can initialize */}
