@@ -206,7 +206,7 @@ export default function AdjustmentPanel({
   }
 
   return (
-    <div className="flex flex-col w-[280px] shrink-0 h-full bg-[#111111] border-r border-[#2a2a2a]">
+    <div className="flex flex-col w-[320px] shrink-0 h-full bg-[#111111] border-r border-[#2a2a2a]">
       {/* Panel header */}
       <div className="flex items-center justify-between px-4 h-[44px] shrink-0 border-b border-[#2a2a2a]">
         <span className="text-[12px] font-medium uppercase tracking-widest text-[#888888] select-none">

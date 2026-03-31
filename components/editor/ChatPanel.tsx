@@ -145,7 +145,7 @@ export default function ChatPanel({
   }
 
   return (
-    <div className="flex flex-col w-[280px] shrink-0 h-full bg-[#111111] border-l border-[#2a2a2a]">
+    <div className="flex flex-col w-[320px] shrink-0 h-full bg-[#111111] border-l border-[#2a2a2a]">
       {/* Panel header */}
       <div className="flex items-center justify-between px-4 h-[44px] shrink-0 border-b border-[#2a2a2a]">
         <span className="text-[12px] font-medium uppercase tracking-widest text-[#888888] select-none">
@@ -159,12 +159,14 @@ export default function ChatPanel({
       {/* Message thread */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto min-h-0 px-4 py-4 flex flex-col gap-4"
+        className="flex-1 overflow-y-auto min-h-0 px-4 py-4 flex flex-col gap-4 [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-track]:bg-[#111111] [&::-webkit-scrollbar-thumb]:bg-[#2a2a2a] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb:hover]:bg-[#3a3a3a]"
       >
         {messages.length === 0 && (
-          <p className="text-[13px] text-[#444444] text-center mt-4 select-none leading-relaxed">
-            Describe the edits you want or ask a question about your photo.
-          </p>
+          <div className="flex-1 flex items-center justify-center">
+            <p className="text-[13px] text-[#444444] text-center select-none leading-relaxed px-2">
+              Describe the edits you want or ask a question about your photo.
+            </p>
+          </div>
         )}
 
         {messages.map((msg) => (

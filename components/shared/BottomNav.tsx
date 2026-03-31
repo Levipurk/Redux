@@ -19,7 +19,7 @@ export default function BottomNav() {
   const [credits, setCredits] = useState<number | null>(null);
 
   useEffect(() => {
-    fetch("/api/user")
+    fetch("/api/credits")
       .then((res) => res.json())
       .then((data: { creditBalance?: number }) => {
         if (typeof data.creditBalance === "number") {
