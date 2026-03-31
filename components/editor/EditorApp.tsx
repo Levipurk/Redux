@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Toaster } from "react-hot-toast";
 
 import { useEditor } from "@/hooks/useEditor";
 import { useCanvas } from "@/hooks/useCanvas";
@@ -46,20 +47,40 @@ export default function EditorApp() {
     canUndo,
     canRedo,
     isDirty,
+    justSaved,
   } = useEditor(imageId);
 
   const {
     canvasRef,
+    containerRef,
     zoom,
     showBefore,
+    isCropping,
+    imageBounds,
+    viewportTransform,
     zoomIn,
     zoomOut,
     resetZoom,
     toggleBefore,
+    rotateCW,
+    rotateCCW,
+    flipH,
+    flipV,
+    straightenImage,
+    startCrop,
+    confirmCrop,
+    cancelCrop,
+    resizeCanvas,
   } = useCanvas(image?.originalUrl ?? null, adjustments);
 
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0a] overflow-hidden">
+      {/* Toast notifications — dark theme matching the editor */}
+      <Toaster
+        position="bottom-center"
+        toastOptions={{ duration: 3000 }}
+      />
+
       <Toolbar
         filename={image?.filename}
         zoom={zoom}
@@ -73,6 +94,7 @@ export default function EditorApp() {
         onUndo={undo}
         onRedo={redo}
         isDirty={isDirty}
+        justSaved={justSaved}
         onExport={() => setShowExport(true)}
         onShowHistory={() => setShowHistory(true)}
       />
@@ -83,18 +105,30 @@ export default function EditorApp() {
           onPreview={previewAdjustment}
           onCommit={updateAdjustment}
           imageId={imageId}
+          imageWidth={image?.width ?? undefined}
+          imageHeight={image?.height ?? undefined}
+          onCrop={startCrop}
+          onRotateCW={rotateCW}
+          onStraighten={straightenImage}
+          onResize={resizeCanvas}
         />
 
-        {loadingImage ? (
-          <div className="flex-1 bg-[#0a0a0a] flex items-center justify-center">
-            <span className="text-[#555555] text-[14px]">Loading image…</span>
-          </div>
-        ) : (
-          <Canvas
-            canvasRef={canvasRef}
-            imageUrl={image?.originalUrl ?? null}
-          />
-        )}
+        {/* Canvas must always be rendered — never conditionally unmount it.
+            If Canvas is hidden while loadingImage=true, the Fabric init effect
+            fires with canvasRef.current=null ([] deps = runs once) and Fabric
+            never initializes. The placeholder inside Canvas shows while
+            imageUrl is null; the image appears once it loads. */}
+        <Canvas
+          canvasRef={canvasRef}
+          containerRef={containerRef}
+          imageUrl={image?.originalUrl ?? null}
+          adjustments={adjustments}
+          imageBounds={imageBounds}
+          viewportTransform={viewportTransform}
+          isCropping={isCropping}
+          onConfirmCrop={confirmCrop}
+          onCancelCrop={cancelCrop}
+        />
 
         <ChatPanel
           adjustments={adjustments}
@@ -116,8 +150,10 @@ export default function EditorApp() {
         open={showExport}
         onClose={() => setShowExport(false)}
         imageId={imageId}
+        filename={image?.filename}
         adjustments={adjustments}
       />
+
     </div>
   );
 }

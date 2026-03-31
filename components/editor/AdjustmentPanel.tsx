@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Minus, ChevronDown, Star } from "lucide-react";
+import { Minus, ChevronDown, Star, Lock, Unlock } from "lucide-react";
 import AdjustmentSlider from "./AdjustmentSlider";
 import type { AdjustmentKey } from "@/constants/adjustments";
 import type { Adjustments } from "@/hooks/useEditor";
@@ -11,6 +11,13 @@ interface AdjustmentPanelProps {
   onPreview: (key: AdjustmentKey, value: number) => void;
   onCommit: (key: AdjustmentKey, value: number) => void;
   imageId?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  // Canvas transform callbacks
+  onCrop?: () => void;
+  onRotateCW?: () => void;
+  onStraighten?: (degrees: number) => void;
+  onResize?: (width: number, height: number) => void;
 }
 
 interface SectionState {
@@ -131,6 +138,12 @@ export default function AdjustmentPanel({
   onPreview,
   onCommit,
   imageId,
+  imageWidth,
+  imageHeight,
+  onCrop,
+  onRotateCW,
+  onStraighten,
+  onResize,
 }: AdjustmentPanelProps) {
   const [sections, setSections] = useState<SectionState>({
     light: true,
@@ -140,6 +153,46 @@ export default function AdjustmentPanel({
     transform: true,
   });
   const [activeTool, setActiveTool] = useState<ActiveTool>(null);
+
+  // Straighten inline slider
+  const [showStraighten, setShowStraighten] = useState(false);
+  const [straightenDeg, setStraightenDeg] = useState(0);
+
+  // Resize inline form
+  const [showResize, setShowResize] = useState(false);
+  const [resizeW, setResizeW] = useState(String(imageWidth ?? ""));
+  const [resizeH, setResizeH] = useState(String(imageHeight ?? ""));
+  const [resizeLocked, setResizeLocked] = useState(true);
+  const aspectRatio = imageWidth && imageHeight ? imageWidth / imageHeight : 1;
+
+  function handleResizeW(val: string) {
+    const w = parseInt(val);
+    if (resizeLocked && !isNaN(w)) {
+      setResizeW(val);
+      setResizeH(String(Math.round(w / aspectRatio)));
+    } else {
+      setResizeW(val);
+    }
+  }
+
+  function handleResizeH(val: string) {
+    const h = parseInt(val);
+    if (resizeLocked && !isNaN(h)) {
+      setResizeH(val);
+      setResizeW(String(Math.round(h * aspectRatio)));
+    } else {
+      setResizeH(val);
+    }
+  }
+
+  function applyResize() {
+    const w = parseInt(resizeW);
+    const h = parseInt(resizeH);
+    if (!isNaN(w) && !isNaN(h) && w > 0 && h > 0) {
+      onResize?.(w, h);
+      setShowResize(false);
+    }
+  }
 
   // Loading flags per AI button
   const [loadingEnhance, setLoadingEnhance] = useState(false);
@@ -349,27 +402,97 @@ export default function AdjustmentPanel({
               <ToolBtn
                 label="Crop"
                 active={activeTool === "crop"}
-                onClick={() => toggleTool("crop")}
+                onClick={() => {
+                  toggleTool("crop");
+                  onCrop?.();
+                }}
               />
               <ToolBtn
                 label="Rotate"
                 active={false}
-                onClick={() => {}}
+                onClick={() => onRotateCW?.()}
               />
             </div>
             {/* Row 2: Straighten | Resize */}
             <div className="grid grid-cols-2 gap-[7px]">
               <ToolBtn
                 label="Straighten"
-                active={activeTool === "straighten"}
-                onClick={() => toggleTool("straighten")}
+                active={showStraighten}
+                onClick={() => setShowStraighten((v) => !v)}
               />
               <ToolBtn
                 label="Resize"
-                active={false}
-                onClick={() => {}}
+                active={showResize}
+                onClick={() => setShowResize((v) => !v)}
               />
             </div>
+
+            {/* Inline straighten slider */}
+            {showStraighten && (
+              <AdjustmentSlider
+                label="Angle"
+                value={straightenDeg}
+                min={-45}
+                max={45}
+                step={0.5}
+                onChange={(v) => {
+                  setStraightenDeg(v);
+                  onStraighten?.(v);
+                }}
+                onCommit={(v) => {
+                  setStraightenDeg(v);
+                  onStraighten?.(v);
+                }}
+              />
+            )}
+
+            {/* Inline resize form */}
+            {showResize && (
+              <div className="bg-[#161616] border border-[#2a2a2a] rounded-sm p-3 flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-1 flex-1">
+                    <label className="text-[10px] text-[#555555] uppercase tracking-wider">
+                      Width
+                    </label>
+                    <input
+                      type="number"
+                      value={resizeW}
+                      onChange={(e) => handleResizeW(e.target.value)}
+                      className="w-full h-[30px] bg-[#111111] border border-[#2a2a2a] rounded-sm px-2 text-[12px] text-white outline-none focus:border-[#444444]"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setResizeLocked((v) => !v)}
+                    className="mt-4 text-[#555555] hover:text-[#888888] transition-colors shrink-0"
+                    title={resizeLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
+                  >
+                    {resizeLocked ? (
+                      <Lock size={13} strokeWidth={1.75} />
+                    ) : (
+                      <Unlock size={13} strokeWidth={1.75} />
+                    )}
+                  </button>
+                  <div className="flex flex-col gap-1 flex-1">
+                    <label className="text-[10px] text-[#555555] uppercase tracking-wider">
+                      Height
+                    </label>
+                    <input
+                      type="number"
+                      value={resizeH}
+                      onChange={(e) => handleResizeH(e.target.value)}
+                      className="w-full h-[30px] bg-[#111111] border border-[#2a2a2a] rounded-sm px-2 text-[12px] text-white outline-none focus:border-[#444444]"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={applyResize}
+                  className="w-full h-[30px] bg-white text-black text-[12px] font-medium rounded-sm hover:bg-[#e5e5e5] transition-colors cursor-pointer"
+                >
+                  Apply
+                </button>
+              </div>
+            )}
+
             {/* AI transform buttons */}
             <AIButton
               label="Generative Fill"

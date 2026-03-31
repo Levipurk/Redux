@@ -3,7 +3,8 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as SliderPrimitive from "@radix-ui/react-slider";
-import { X, Download, BookImage } from "lucide-react";
+import { X, Download, BookImage, Loader2 } from "lucide-react";
+import toast from "react-hot-toast";
 import type { Adjustments } from "@/hooks/useEditor";
 
 type ExportFormat = "jpeg" | "png" | "tiff";
@@ -12,6 +13,7 @@ interface ExportModalProps {
   open: boolean;
   onClose: () => void;
   imageId?: string;
+  filename?: string;
   adjustments: Adjustments;
 }
 
@@ -22,7 +24,7 @@ function formatBytes(bytes: number): string {
 }
 
 function estimateSize(format: ExportFormat, quality: number): string {
-  const base = 4 * 1024 * 1024; // rough 4MB original
+  const base = 4 * 1024 * 1024;
   if (format === "tiff") return `~${formatBytes(base * 2)}`;
   if (format === "png") return `~${formatBytes(base * 0.8)}`;
   return `~${formatBytes(base * (quality / 100) * 0.4)}`;
@@ -32,6 +34,7 @@ export default function ExportModal({
   open,
   onClose,
   imageId,
+  filename,
   adjustments,
 }: ExportModalProps) {
   const [format, setFormat] = useState<ExportFormat>("jpeg");
@@ -43,6 +46,7 @@ export default function ExportModal({
     if (!imageId) return;
     setLoading(true);
     setError(null);
+
     try {
       const res = await fetch("/api/images/export", {
         method: "POST",
@@ -60,12 +64,39 @@ export default function ExportModal({
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `export.${format}`;
+
+        // Use the original filename (strip extension) + chosen format
+        const base = filename
+          ? filename.replace(/\.[^.]+$/, "")
+          : "export";
+        a.download = `${base}.${format}`;
+
+        // Must be attached to the DOM for Firefox compatibility
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
+
+        toast.success("Image downloaded!", {
+          style: {
+            background: "#1a1a1a",
+            color: "#ffffff",
+            border: "1px solid #2a2a2a",
+            borderRadius: "4px",
+            fontSize: "13px",
+          },
+        });
         onClose();
       } else {
-        // Save to library — response is already the saved image record
+        toast.success("Saved to library!", {
+          style: {
+            background: "#1a1a1a",
+            color: "#ffffff",
+            border: "1px solid #2a2a2a",
+            borderRadius: "4px",
+            fontSize: "13px",
+          },
+        });
         onClose();
       }
     } catch (err) {
@@ -149,7 +180,6 @@ export default function ExportModal({
               </div>
             )}
 
-            {/* Size estimate for non-JPEG */}
             {format !== "jpeg" && (
               <span className="text-[11px] text-[#555555]">
                 Estimated size: {estimateSize(format, quality)}
@@ -167,7 +197,11 @@ export default function ExportModal({
                 disabled={loading || !imageId}
                 className="flex-1 flex items-center justify-center gap-[6px] h-[36px] bg-white text-black text-[13px] font-medium rounded-sm hover:bg-[#e5e5e5] transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
-                <Download size={13} strokeWidth={2} />
+                {loading ? (
+                  <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                ) : (
+                  <Download size={13} strokeWidth={2} />
+                )}
                 {loading ? "Exporting…" : "Download"}
               </button>
               <button
@@ -175,7 +209,11 @@ export default function ExportModal({
                 disabled={loading || !imageId}
                 className="flex-1 flex items-center justify-center gap-[6px] h-[36px] bg-[#1a1a1a] border border-[#2a2a2a] text-white text-[13px] font-medium rounded-sm hover:bg-[#222222] transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
-                <BookImage size={13} strokeWidth={1.75} />
+                {loading ? (
+                  <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                ) : (
+                  <BookImage size={13} strokeWidth={1.75} />
+                )}
                 Save to Library
               </button>
             </div>

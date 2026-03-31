@@ -24,6 +24,8 @@ interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
   isDirty: boolean;
+  // true for ~2 s after a successful auto-save — triggers the pulse animation
+  justSaved?: boolean;
   onExport: () => void;
   onShowHistory: () => void;
 }
@@ -76,6 +78,7 @@ export default function Toolbar({
   onUndo,
   onRedo,
   isDirty,
+  justSaved = false,
   onExport,
   onShowHistory,
 }: ToolbarProps) {
@@ -147,10 +150,12 @@ export default function Toolbar({
             className={[
               "w-[6px] h-[6px] rounded-full shrink-0 transition-colors",
               isDirty ? "bg-[#f59e0b]" : "bg-[#22c55e]",
+              // Pulse for 2 s after a successful auto-save
+              justSaved ? "animate-pulse" : "",
             ].join(" ")}
           />
           <span className="text-[11px] text-[#888888] whitespace-nowrap">
-            {isDirty ? "Unsaved" : "Auto-saved"}
+            {isDirty ? "Unsaved" : justSaved ? "Saving…" : "Auto-saved"}
           </span>
         </div>
 

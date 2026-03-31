@@ -7,6 +7,9 @@ interface AdjustmentSliderProps {
   value: number;
   onChange: (value: number) => void;
   onCommit: (value: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 export default function AdjustmentSlider({
@@ -14,7 +17,12 @@ export default function AdjustmentSlider({
   value,
   onChange,
   onCommit,
+  min = -100,
+  max = 100,
+  step = 1,
 }: AdjustmentSliderProps) {
+  const defaultValue = Math.max(min, Math.min(max, 0));
+
   return (
     <div className="flex flex-col gap-[6px] px-4 py-[6px]">
       <div className="flex items-center justify-between">
@@ -24,18 +32,18 @@ export default function AdjustmentSlider({
         <span
           className="text-[13px] text-[#888888] leading-none tabular-nums cursor-default select-none"
           onDoubleClick={() => {
-            onChange(0);
-            onCommit(0);
+            onChange(defaultValue);
+            onCommit(defaultValue);
           }}
         >
-          {value}
+          {Number.isInteger(value) ? value : value.toFixed(1)}
         </span>
       </div>
 
       <SliderPrimitive.Root
-        min={-100}
-        max={100}
-        step={1}
+        min={min}
+        max={max}
+        step={step}
         value={[value]}
         onValueChange={([v]) => onChange(v)}
         onValueCommit={([v]) => onCommit(v)}

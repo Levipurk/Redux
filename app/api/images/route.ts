@@ -119,6 +119,10 @@ export async function DELETE(request: NextRequest) {
 
   const { deleteFromCloudinary } = await import("@/lib/cloudinary");
   await deleteFromCloudinary(image.publicId);
+
+  // Remove dependent ImageVersion rows before deleting the parent Image record.
+  // Without this, Prisma throws a foreign-key RESTRICT violation.
+  await prisma.imageVersion.deleteMany({ where: { imageId } });
   await prisma.image.delete({ where: { id: imageId } });
 
   return NextResponse.json({ success: true });
