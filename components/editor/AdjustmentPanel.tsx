@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Minus, ChevronDown, Star, Lock, Unlock } from "lucide-react";
+import { useRef, useState } from "react";
+import { Loader2, Minus, ChevronDown, Star, Lock, Unlock } from "lucide-react";
 import toast from "react-hot-toast";
 import AdjustmentSlider from "./AdjustmentSlider";
 import type { AdjustmentKey } from "@/constants/adjustments";
@@ -106,7 +106,11 @@ function AIButton({
       disabled={loading || disabled}
       className="flex items-center justify-center gap-[7px] w-full h-[34px] bg-[#1a1a1a] border border-[#2a2a2a] rounded-sm text-[13px] text-white hover:bg-[#222222] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
     >
-      <Star size={13} strokeWidth={1.5} />
+      {loading ? (
+        <Loader2 size={13} strokeWidth={2} className="animate-spin shrink-0" />
+      ) : (
+        <Star size={13} strokeWidth={1.5} />
+      )}
       {loading ? "Working…" : label}
     </button>
   );
@@ -135,6 +139,22 @@ function ToolBtn({
       {label}
     </button>
   );
+}
+
+async function fileToBase64(
+  file: File,
+): Promise<{ dataUrl: string; base64: string; mediaType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const [header, b64] = dataUrl.split(",");
+      const mediaType = header.replace("data:", "").replace(";base64", "");
+      resolve({ dataUrl, base64: b64, mediaType });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -207,6 +227,8 @@ export default function AdjustmentPanel({
   const [loadingToneBalance, setLoadingToneBalance] = useState(false);
   const [loadingSmartColor, setLoadingSmartColor] = useState(false);
   const [loadingStyleMatch, setLoadingStyleMatch] = useState(false);
+  const [styleMatchPreview, setStyleMatchPreview] = useState<string | null>(null);
+  const styleMatchInputRef = useRef<HTMLInputElement>(null);
   const [loadingGenFill, setLoadingGenFill] = useState(false);
   const [loadingRemoveBg, setLoadingRemoveBg] = useState(false);
 
@@ -323,6 +345,68 @@ export default function AdjustmentPanel({
       });
     } finally {
       setLoadingSmartColor(false);
+    }
+  }
+
+  // ── Style Match (reference image + vision) ───────────────────────────────
+  async function handleStyleMatchFilePick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = "";
+    if (!file || !imageUrl) return;
+
+    const darkStyle = {
+      background: "#1a1a1a",
+      color: "#e5e5e5",
+      border: "1px solid #2a2a2a",
+    };
+
+    try {
+      const { dataUrl, base64, mediaType } = await fileToBase64(file);
+      setStyleMatchPreview(dataUrl);
+      setLoadingStyleMatch(true);
+
+      const res = await fetch("/api/ai/style-match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageUrl,
+          referenceImageBase64: base64,
+          referenceImageMediaType: mediaType,
+        }),
+      });
+
+      if (res.status === 402) {
+        toast("Insufficient credits", { icon: "💳", style: darkStyle });
+        setStyleMatchPreview(null);
+        return;
+      }
+      if (res.status === 429) {
+        toast("Rate limit exceeded. Please try again later.", { icon: "⏱", style: darkStyle });
+        setStyleMatchPreview(null);
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const data = (await res.json()) as { adjustments?: Partial<Record<AdjustmentKey, number>> };
+      if (data.adjustments) {
+        (Object.entries(data.adjustments) as [AdjustmentKey, number][]).forEach(
+          ([key, value]) => onCommit(key, value),
+        );
+      }
+      toast.success("Style Match applied", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+      setStyleMatchPreview(null);
+    } catch (err) {
+      console.error("[AdjustmentPanel] style_match failed:", err);
+      toast.error("Style Match failed", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+      setStyleMatchPreview(null);
+    } finally {
+      setLoadingStyleMatch(false);
     }
   }
 
@@ -448,11 +532,29 @@ export default function AdjustmentPanel({
                 disabled={!imageUrl}
                 onClick={() => void runSmartColorBalance()}
               />
+              <input
+                ref={styleMatchInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => { void handleStyleMatchFilePick(e); }}
+              />
+              {styleMatchPreview && (
+                <div className="px-0 pb-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={styleMatchPreview}
+                    alt="Style reference"
+                    className="h-[48px] w-auto max-w-full rounded-sm object-cover border border-[#2a2a2a]"
+                  />
+                  <p className="text-[10px] text-[#555555] mt-1">Reference style</p>
+                </div>
+              )}
               <AIButton
                 label="Style Match"
                 loading={loadingStyleMatch}
                 disabled={!imageUrl}
-                onClick={() => void callRetouch("style_match", setLoadingStyleMatch)}
+                onClick={() => styleMatchInputRef.current?.click()}
               />
             </div>
           </div>
