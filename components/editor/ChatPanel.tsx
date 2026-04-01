@@ -20,7 +20,7 @@ interface Message {
 }
 
 type SseEvent =
-  | { type: "meta"; freeRemaining: number }
+  | { type: "meta"; dailyRemaining: number }
   | { type: "text"; text: string }
   | { type: "adjustments"; adjustments: Partial<Record<AdjustmentKey, number>> }
   | { type: "done" };
@@ -82,8 +82,8 @@ export default function ChatPanel({
   const [attachedBase64, setAttachedBase64] = useState<string | null>(null);
   const [attachedMediaType, setAttachedMediaType] = useState<string | null>(null);
 
-  // Free messages remaining (populated from SSE meta event)
-  const [freeRemaining, setFreeRemaining] = useState<number | null>(null);
+  // Daily free messages remaining (populated from SSE meta event; null = credit user)
+  const [dailyRemaining, setDailyRemaining] = useState<number | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -165,12 +165,55 @@ export default function ChatPanel({
         }),
       });
 
+      if (res.status === 429) {
+        const data = (await res.json()) as { error?: string };
+        const isDaily = data.error?.toLowerCase().includes("daily");
+        if (isDaily) {
+          toast.custom(
+            (t) => (
+              <div
+                className={`flex items-center gap-3 px-4 py-3 rounded-sm border border-[#2a2a2a] bg-[#1a1a1a] text-[#e5e5e5] text-[13px] shadow-lg transition-opacity ${t.visible ? "opacity-100" : "opacity-0"}`}
+              >
+                <span>Daily free limit reached.</span>
+                <a
+                  href="/settings"
+                  className="text-white underline underline-offset-2 font-medium whitespace-nowrap"
+                  onClick={() => toast.dismiss(t.id)}
+                >
+                  Get credits →
+                </a>
+              </div>
+            ),
+            { duration: 5000 },
+          );
+        } else {
+          toast("Too many requests. Please slow down.", {
+            icon: "⏱",
+            style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+          });
+        }
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        return;
+      }
+
       if (res.status === 402) {
-        toast("Insufficient credits — purchase more to continue.", {
-          icon: "💳",
-          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
-        });
-        // Remove the empty placeholder
+        toast.custom(
+          (t) => (
+            <div
+              className={`flex items-center gap-3 px-4 py-3 rounded-sm border border-[#2a2a2a] bg-[#1a1a1a] text-[#e5e5e5] text-[13px] shadow-lg transition-opacity ${t.visible ? "opacity-100" : "opacity-0"}`}
+            >
+              <span>Insufficient credits.</span>
+              <a
+                href="/settings"
+                className="text-white underline underline-offset-2 font-medium whitespace-nowrap"
+                onClick={() => toast.dismiss(t.id)}
+              >
+                Purchase credits →
+              </a>
+            </div>
+          ),
+          { duration: 5000 },
+        );
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
         return;
       }
@@ -204,7 +247,7 @@ export default function ChatPanel({
           }
 
           if (event.type === "meta") {
-            setFreeRemaining(event.freeRemaining);
+            setDailyRemaining(event.dailyRemaining);
           } else if (event.type === "text") {
             setMessages((prev) =>
               prev.map((m) =>
@@ -337,11 +380,11 @@ export default function ChatPanel({
         </div>
       )}
 
-      {/* Free messages counter */}
-      {freeRemaining !== null && freeRemaining > 0 && (
+      {/* Daily free messages counter — only shown for free-tier users */}
+      {dailyRemaining !== null && dailyRemaining >= 0 && (
         <div className="px-4 pb-1">
           <p className="text-[11px] text-[#444444]">
-            {freeRemaining} free message{freeRemaining !== 1 ? "s" : ""} remaining
+            {dailyRemaining} of 10 free message{dailyRemaining !== 1 ? "s" : ""} remaining today
           </p>
         </div>
       )}

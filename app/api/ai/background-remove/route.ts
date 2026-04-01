@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import Replicate from "replicate";
 import { uploadToCloudinary } from "@/lib/cloudinary";
 import { prisma } from "@/lib/prisma";
+import { checkRateLimit } from "@/lib/kv";
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -33,6 +34,14 @@ export async function POST(request: Request) {
 
     if (user.creditBalance < 1) {
       return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+    }
+
+    const rateLimit = await checkRateLimit(user.id, "background_remove", 20);
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: "Too many requests. Please slow down." },
+        { status: 429 },
+      );
     }
 
     // ── Body ────────────────────────────────────────────────────────────────

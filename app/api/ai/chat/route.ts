@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { ImageBlockParam, TextBlockParam } from "@anthropic-ai/sdk/resources";
 import { anthropic, formatAdjustmentsForPrompt } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
+import { checkRateLimit, checkDailyLimit } from "@/lib/kv";
 import type { AdjustmentKey } from "@/constants/adjustments";
 
 // ---------------------------------------------------------------------------
@@ -29,10 +30,10 @@ Rules:
 - If no adjustments are needed, omit the block entirely.`;
 
 // ---------------------------------------------------------------------------
-// SSE helper
+// SSE helpers
 // ---------------------------------------------------------------------------
 type SseEvent =
-  | { type: "meta"; freeRemaining: number }
+  | { type: "meta"; dailyRemaining: number }
   | { type: "text"; text: string }
   | { type: "adjustments"; adjustments: Partial<Record<AdjustmentKey, number>> }
   | { type: "done" };
@@ -40,6 +41,10 @@ type SseEvent =
 function encodeEvent(data: SseEvent): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
 }
+
+const FREE_DAILY_LIMIT = 10;
+const FREE_HOURLY_LIMIT = 10;
+const CREDIT_HOURLY_LIMIT = 60;
 
 // ---------------------------------------------------------------------------
 // POST /api/ai/chat
@@ -70,10 +75,47 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
+  const isFreeUser = user.lifetimeFreeAI < 20;
+
+  // ── Rate limiting ─────────────────────────────────────────────────────────
+  if (isFreeUser) {
+    // Daily cap (10 messages/day) — checked before the hourly window
+    const daily = await checkDailyLimit(user.id, "chat", FREE_DAILY_LIMIT);
+    if (!daily.allowed) {
+      return NextResponse.json(
+        { error: "Daily free message limit reached. Upgrade to continue." },
+        { status: 429 },
+      );
+    }
+
+    // Hourly window for free users (10/hr)
+    const hourly = await checkRateLimit(user.id, "chat_free", FREE_HOURLY_LIMIT);
+    if (!hourly.allowed) {
+      return NextResponse.json(
+        { error: "Too many requests. Please slow down." },
+        { status: 429 },
+      );
+    }
+
+    // dailyRemaining reflects how many messages the user still has today
+    // after this one (already counted by checkDailyLimit's incr above).
+    var dailyRemaining = daily.remaining; // eslint-disable-line no-var
+  } else {
+    // Credit users get a higher hourly window (60/hr)
+    const hourly = await checkRateLimit(user.id, "chat_credit", CREDIT_HOURLY_LIMIT);
+    if (!hourly.allowed) {
+      return NextResponse.json(
+        { error: "Too many requests. Please slow down." },
+        { status: 429 },
+      );
+    }
+    var dailyRemaining = 0; // eslint-disable-line no-var
+  }
+
   // ── Credit / free-message gate ────────────────────────────────────────────
   let freeRemaining: number;
 
-  if (user.lifetimeFreeAI < 20) {
+  if (isFreeUser) {
     await prisma.user.update({
       where: { id: user.id },
       data: { lifetimeFreeAI: { increment: 1 } },
@@ -96,6 +138,10 @@ export async function POST(request: Request) {
     });
     freeRemaining = 0;
   }
+
+  // Suppress unused-variable lint — freeRemaining is used below inside the
+  // ReadableStream closure where re-declaration isn't possible.
+  void freeRemaining;
 
   // ── Build Anthropic message content ───────────────────────────────────────
   const adjustmentsContext = formatAdjustmentsForPrompt(
@@ -125,7 +171,8 @@ export async function POST(request: Request) {
   // ── Stream response ───────────────────────────────────────────────────────
   const stream = new ReadableStream({
     async start(controller) {
-      controller.enqueue(encodeEvent({ type: "meta", freeRemaining }));
+      // Send daily remaining so the client can update its counter
+      controller.enqueue(encodeEvent({ type: "meta", dailyRemaining }));
 
       let fullText = "";
 

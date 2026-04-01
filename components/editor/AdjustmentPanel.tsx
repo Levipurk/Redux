@@ -218,6 +218,21 @@ export default function AdjustmentPanel({
     setActiveTool((prev) => (prev === tool ? null : tool));
   }
 
+  // ── Shared AI error handler ───────────────────────────────────────────────
+  /** Returns true if the error was handled (caller should return early). */
+  function handleAiError(status: number): boolean {
+    const darkStyle = { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" };
+    if (status === 402) {
+      toast("Insufficient credits — purchase more to continue.", { icon: "💳", style: darkStyle });
+      return true;
+    }
+    if (status === 429) {
+      toast("Rate limit exceeded. Please try again later.", { icon: "⏱", style: darkStyle });
+      return true;
+    }
+    return false;
+  }
+
   // ── Auto Enhance ──────────────────────────────────────────────────────────
   async function runAutoEnhance() {
     if (!imageUrl) return;
@@ -228,13 +243,7 @@ export default function AdjustmentPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageUrl, currentAdjustments: adjustments }),
       });
-      if (res.status === 402) {
-        toast("Insufficient credits — purchase more to continue.", {
-          icon: "💳",
-          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
-        });
-        return;
-      }
+      if (handleAiError(res.status)) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { adjustments?: Partial<Record<AdjustmentKey, number>> };
       if (data.adjustments) {
@@ -265,13 +274,7 @@ export default function AdjustmentPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageUrl, currentAdjustments: adjustments }),
       });
-      if (res.status === 402) {
-        toast("Insufficient credits — purchase more to continue.", {
-          icon: "💳",
-          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
-        });
-        return;
-      }
+      if (handleAiError(res.status)) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { adjustments?: Partial<Record<AdjustmentKey, number>> };
       if (data.adjustments) {
@@ -302,13 +305,7 @@ export default function AdjustmentPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageUrl, currentAdjustments: adjustments }),
       });
-      if (res.status === 402) {
-        toast("Insufficient credits — purchase more to continue.", {
-          icon: "💳",
-          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
-        });
-        return;
-      }
+      if (handleAiError(res.status)) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { adjustments?: Partial<Record<AdjustmentKey, number>> };
       if (data.adjustments) {
@@ -339,13 +336,7 @@ export default function AdjustmentPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageUrl, imageId }),
       });
-      if (res.status === 402) {
-        toast("Insufficient credits — purchase more to continue.", {
-          icon: "💳",
-          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
-        });
-        return;
-      }
+      if (handleAiError(res.status)) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { resultUrl?: string };
       if (data.resultUrl) {

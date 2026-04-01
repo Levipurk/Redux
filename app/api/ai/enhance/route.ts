@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { ImageBlockParam, TextBlockParam } from "@anthropic-ai/sdk/resources";
 import { anthropic } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
+import { checkRateLimit } from "@/lib/kv";
 import type { AdjustmentKey } from "@/constants/adjustments";
 
 const SYSTEM_PROMPT =
@@ -38,6 +39,14 @@ export async function POST(request: Request) {
 
   if (user.creditBalance < 1) {
     return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+  }
+
+  const rateLimit = await checkRateLimit(user.id, "enhance", 40);
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please slow down." },
+      { status: 429 },
+    );
   }
 
   const body = (await request.json()) as RequestBody;
