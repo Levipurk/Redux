@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Loader2, Minus, ChevronDown, Star, Lock, Unlock } from "lucide-react";
+import { Loader2, Minus, ChevronDown, Star, Lock, Unlock, X } from "lucide-react";
 import toast from "react-hot-toast";
 import AdjustmentSlider from "./AdjustmentSlider";
 import type { AdjustmentKey } from "@/constants/adjustments";
 import type { Adjustments } from "@/hooks/useEditor";
+import { createExpandedCanvas, type ExpandDirection } from "@/hooks/useCanvas";
 
 interface AdjustmentPanelProps {
   adjustments: Adjustments;
@@ -245,6 +246,11 @@ export default function AdjustmentPanel({
   const [styleMatchPreview, setStyleMatchPreview] = useState<string | null>(null);
   const styleMatchInputRef = useRef<HTMLInputElement>(null);
   const [loadingGenFill, setLoadingGenFill] = useState(false);
+  const [genFillModalOpen, setGenFillModalOpen] = useState(false);
+  const [genFillDirection, setGenFillDirection] = useState<ExpandDirection>("right");
+  const [genFillPixels, setGenFillPixels] = useState("128");
+  const [genFillPrompt, setGenFillPrompt] = useState("");
+  const [genFillPreviewUrl, setGenFillPreviewUrl] = useState<string | null>(null);
   const [loadingRemoveBg, setLoadingRemoveBg] = useState(false);
   const [loadingHeal, setLoadingHeal] = useState(false);
 
@@ -525,23 +531,111 @@ export default function AdjustmentPanel({
     setActiveTool(null);
   }
 
-  // ── Generic placeholder for unimplemented AI features ─────────────────────
-  async function callRetouch(
-    mode: string,
-    setLoading: (v: boolean) => void,
-  ) {
-    if (!imageId) return;
-    setLoading(true);
+  const darkToastStyle = {
+    background: "#1a1a1a",
+    color: "#e5e5e5",
+    border: "1px solid #2a2a2a",
+  };
+
+  useEffect(() => {
+    if (!genFillModalOpen || !canvasImageUrl) {
+      setGenFillPreviewUrl(null);
+      return;
+    }
+    const px = Math.round(parseInt(genFillPixels, 10));
+    if (!Number.isFinite(px) || px < 1) {
+      setGenFillPreviewUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext("2d");
+        if (!ctx) {
+          setGenFillPreviewUrl(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const expanded = createExpandedCanvas(c, genFillDirection, px);
+        setGenFillPreviewUrl(expanded.toDataURL("image/png"));
+      } catch {
+        setGenFillPreviewUrl(null);
+      }
+    };
+    img.onerror = () => {
+      if (!cancelled) setGenFillPreviewUrl(null);
+    };
+    img.src = canvasImageUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [genFillModalOpen, canvasImageUrl, genFillDirection, genFillPixels]);
+
+  function openGenerativeFillModal() {
+    setGenFillDirection("right");
+    setGenFillPixels("128");
+    setGenFillPrompt("");
+    setGenFillPreviewUrl(null);
+    setGenFillModalOpen(true);
+  }
+
+  async function applyGenerativeFill() {
+    if (!canvasImageUrl) return;
+    const px = Math.round(parseInt(genFillPixels, 10));
+    if (!Number.isFinite(px) || px < 1 || px > 512) {
+      toast.error("Enter expand pixels between 1 and 512", { style: darkToastStyle });
+      return;
+    }
+    const promptTrim = genFillPrompt.trim();
+    if (!promptTrim) {
+      toast.error("Enter a prompt", { style: darkToastStyle });
+      return;
+    }
+
+    setLoadingGenFill(true);
     try {
-      await fetch("/api/ai/enhance", {
+      const res = await fetch("/api/ai/generative-fill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageId, mode }),
+        body: JSON.stringify({
+          imageUrl: canvasImageUrl,
+          expandDirection: genFillDirection,
+          expandPixels: px,
+          prompt: promptTrim,
+        }),
       });
+
+      if (res.status === 402) {
+        toast("Insufficient credits", { icon: "💳", style: darkToastStyle });
+        return;
+      }
+      if (res.status === 429) {
+        toast("Rate limit exceeded. Please try again later.", { icon: "⏱", style: darkToastStyle });
+        return;
+      }
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(errBody.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { resultUrl?: string };
+      if (data.resultUrl) {
+        onReloadCanvas?.(data.resultUrl);
+      }
+      toast.success("Generative Fill applied successfully", { style: darkToastStyle });
+      setGenFillModalOpen(false);
     } catch (err) {
-      console.error(`[AdjustmentPanel] ${mode} failed:`, err);
+      console.error("[AdjustmentPanel] generative_fill failed:", err);
+      toast.error("Generative Fill failed", { style: darkToastStyle });
     } finally {
-      setLoading(false);
+      setLoadingGenFill(false);
     }
   }
 
@@ -845,12 +939,15 @@ export default function AdjustmentPanel({
               </div>
             )}
 
+            <p className="text-[10px] text-[#555555] uppercase tracking-widest pt-1 pb-0.5">
+              Edit / Expand
+            </p>
             {/* AI transform buttons */}
             <AIButton
               label="Generative Fill"
               loading={loadingGenFill}
-              disabled={!imageUrl}
-              onClick={() => void callRetouch("generative_fill", setLoadingGenFill)}
+              disabled={!canvasImageUrl}
+              onClick={openGenerativeFillModal}
             />
             <AIButton
               label="Remove Background"
@@ -862,6 +959,128 @@ export default function AdjustmentPanel({
         )}
 
       </div>
+
+      {genFillModalOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="genfill-modal-title"
+        >
+          <div className="relative w-full max-w-[400px] bg-[#161616] border border-[#2a2a2a] rounded-sm shadow-xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between px-4 h-11 border-b border-[#2a2a2a] shrink-0">
+              <h2 id="genfill-modal-title" className="text-[13px] font-medium text-white">
+                Generative Fill
+              </h2>
+              <button
+                type="button"
+                disabled={loadingGenFill}
+                onClick={() => setGenFillModalOpen(false)}
+                className="text-[#555555] hover:text-[#888888] transition-colors p-1 disabled:opacity-40"
+                aria-label="Close"
+              >
+                <X size={16} strokeWidth={2} />
+              </button>
+            </div>
+
+            <div className="p-4 flex flex-col gap-3 overflow-y-auto min-h-0">
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-[#555555] uppercase tracking-wider">
+                  Expand direction
+                </label>
+                <select
+                  value={genFillDirection}
+                  onChange={(e) => setGenFillDirection(e.target.value as ExpandDirection)}
+                  disabled={loadingGenFill}
+                  className="h-[34px] bg-[#111111] border border-[#2a2a2a] rounded-sm px-2 text-[13px] text-white outline-none focus:border-[#444444] cursor-pointer disabled:opacity-40"
+                >
+                  <option value="top">Top</option>
+                  <option value="bottom">Bottom</option>
+                  <option value="left">Left</option>
+                  <option value="right">Right</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-[#555555] uppercase tracking-wider">
+                  Expand pixels (1–512)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={512}
+                  value={genFillPixels}
+                  onChange={(e) => setGenFillPixels(e.target.value)}
+                  disabled={loadingGenFill}
+                  className="h-[34px] bg-[#111111] border border-[#2a2a2a] rounded-sm px-2 text-[13px] text-white outline-none focus:border-[#444444] disabled:opacity-40"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-[#555555] uppercase tracking-wider">
+                  Prompt
+                </label>
+                <textarea
+                  value={genFillPrompt}
+                  onChange={(e) => setGenFillPrompt(e.target.value)}
+                  disabled={loadingGenFill}
+                  rows={3}
+                  placeholder="Describe what should appear in the new area…"
+                  className="w-full bg-[#111111] border border-[#2a2a2a] rounded-sm px-2 py-2 text-[13px] text-white outline-none focus:border-[#444444] resize-none disabled:opacity-40 placeholder:text-[#555555]"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] text-[#555555] uppercase tracking-wider">
+                  Preview (transparent = new area)
+                </span>
+                <div
+                  className="rounded-sm border border-[#2a2a2a] overflow-hidden flex items-center justify-center min-h-[120px] max-h-[200px] bg-[#1a1a1a] [background-image:linear-gradient(45deg,#222_25%,transparent_25%),linear-gradient(-45deg,#222_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#222_75%),linear-gradient(-45deg,transparent_75%,#222_75%)] [background-size:10px_10px] [background-position:0_0,0_5px,5px_-5px,-5px_0]"
+                >
+                  {genFillPreviewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={genFillPreviewUrl}
+                      alt="Expanded canvas preview"
+                      className="max-w-full max-h-[200px] w-auto h-auto object-contain"
+                    />
+                  ) : (
+                    <span className="text-[11px] text-[#555555] px-4 py-6 text-center">
+                      {canvasImageUrl ? "Loading preview…" : "No image"}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-[7px] p-4 pt-0 shrink-0">
+              <button
+                type="button"
+                disabled={loadingGenFill}
+                onClick={() => setGenFillModalOpen(false)}
+                className="flex-1 h-[34px] bg-[#1a1a1a] border border-[#2a2a2a] rounded-sm text-[13px] text-white hover:bg-[#222222] transition-colors cursor-pointer disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={loadingGenFill || !canvasImageUrl}
+                onClick={() => void applyGenerativeFill()}
+                className="flex-1 h-[34px] bg-white rounded-sm text-[13px] text-black font-medium hover:bg-[#e5e5e5] transition-colors cursor-pointer disabled:opacity-40 inline-flex items-center justify-center gap-2"
+              >
+                {loadingGenFill ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Processing…
+                  </>
+                ) : (
+                  "Apply"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
