@@ -289,6 +289,43 @@ export default function AdjustmentPanel({
     }
   }
 
+  // ── Smart Color Balance ───────────────────────────────────────────────────
+  async function runSmartColorBalance() {
+    if (!imageUrl) return;
+    setLoadingSmartColor(true);
+    try {
+      const res = await fetch("/api/ai/color-balance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl, currentAdjustments: adjustments }),
+      });
+      if (res.status === 402) {
+        toast("Insufficient credits — purchase more to continue.", {
+          icon: "💳",
+          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+        });
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { adjustments?: Partial<Record<AdjustmentKey, number>> };
+      if (data.adjustments) {
+        (Object.entries(data.adjustments) as [AdjustmentKey, number][]).forEach(
+          ([key, value]) => onCommit(key, value),
+        );
+      }
+      toast.success("Smart Color Balance applied", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+    } catch (err) {
+      console.error("[AdjustmentPanel] smart_color_balance failed:", err);
+      toast.error("Smart Color Balance failed", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+    } finally {
+      setLoadingSmartColor(false);
+    }
+  }
+
   // ── Generic placeholder for unimplemented AI features ─────────────────────
   async function callRetouch(
     mode: string,
@@ -380,7 +417,7 @@ export default function AdjustmentPanel({
                 label="Smart Color Balance"
                 loading={loadingSmartColor}
                 disabled={!imageUrl}
-                onClick={() => void callRetouch("smart_color_balance", setLoadingSmartColor)}
+                onClick={() => void runSmartColorBalance()}
               />
               <AIButton
                 label="Style Match"
