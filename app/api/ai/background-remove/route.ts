@@ -18,24 +18,15 @@ interface RequestBody {
 }
 
 export async function POST(request: Request) {
-  console.log("[/api/ai/background-remove] ── incoming request ──");
-
   try {
     // ── Auth ────────────────────────────────────────────────────────────────
     const { userId: clerkId } = await auth();
-    console.log("[/api/ai/background-remove] clerkId:", clerkId ?? "(none)");
     if (!clerkId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // ── Environment check ───────────────────────────────────────────────────
-    const tokenPresent = !!process.env.REPLICATE_API_TOKEN;
-    const tokenLength  = process.env.REPLICATE_API_TOKEN?.length ?? 0;
-    console.log("[/api/ai/background-remove] REPLICATE_API_TOKEN present:", tokenPresent, "| length:", tokenLength);
-
     // ── User ────────────────────────────────────────────────────────────────
     const user = await prisma.user.findUnique({ where: { clerkId } });
-    console.log("[/api/ai/background-remove] user found:", !!user, "| creditBalance:", user?.creditBalance);
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
@@ -47,7 +38,6 @@ export async function POST(request: Request) {
     // ── Body ────────────────────────────────────────────────────────────────
     const body = (await request.json()) as RequestBody;
     const { imageUrl, imageId } = body;
-    console.log("[/api/ai/background-remove] imageId:", imageId, "| imageUrl:", imageUrl?.slice(0, 80));
 
     if (!imageUrl || !imageId) {
       return NextResponse.json(
@@ -60,7 +50,6 @@ export async function POST(request: Request) {
     const image = await prisma.image.findFirst({
       where: { id: imageId, userId: user.id },
     });
-    console.log("[/api/ai/background-remove] image record found:", !!image);
     if (!image) {
       return NextResponse.json({ error: "Image not found" }, { status: 404 });
     }
@@ -78,21 +67,15 @@ export async function POST(request: Request) {
         feature: "remove_background",
       },
     });
-    console.log("[/api/ai/background-remove] credit deducted");
 
     try {
       // ── Call Replicate ────────────────────────────────────────────────────
-      console.log("[/api/ai/background-remove] calling replicate.run() with model:", REPLICATE_MODEL);
-
       const output = await replicate.run(
         REPLICATE_MODEL as `${string}/${string}:${string}`,
         { input: { image: imageUrl } },
       );
 
-      console.log("[/api/ai/background-remove] Replicate output type:", typeof output);
-      console.log("[/api/ai/background-remove] Replicate output:", String(output)?.slice(0, 300));
-
-      // lucataco/remove-bg returns a FileOutput object (SDK v1) or a URL string.
+      // The model returns a FileOutput object (SDK v1) or a URL string.
       // FileOutput has a .url() method returning a URL; fall back to string coercion.
       let resultUrl: string;
       if (typeof output === "string") {
@@ -109,23 +92,18 @@ export async function POST(request: Request) {
         throw new Error(`Unexpected Replicate output shape: ${String(output)}`);
       }
 
-      console.log("[/api/ai/background-remove] result URL:", resultUrl?.slice(0, 120));
-
       // ── Download result PNG ───────────────────────────────────────────────
       const resultRes = await fetch(resultUrl);
-      console.log("[/api/ai/background-remove] fetch result status:", resultRes.status);
       if (!resultRes.ok) {
         throw new Error(`Failed to download result PNG: ${resultRes.status} ${resultRes.statusText}`);
       }
       const buffer = Buffer.from(await resultRes.arrayBuffer());
-      console.log("[/api/ai/background-remove] downloaded buffer size:", buffer.byteLength);
 
       // ── Upload to Cloudinary ──────────────────────────────────────────────
       const uploaded = await uploadToCloudinary(
         buffer,
         `${image.filename.replace(/\.[^/.]+$/, "")}_no_bg.png`,
       );
-      console.log("[/api/ai/background-remove] Cloudinary upload done:", uploaded.secureUrl?.slice(0, 80));
 
       // ── Save ImageVersion ─────────────────────────────────────────────────
       await prisma.imageVersion.create({
@@ -138,20 +116,11 @@ export async function POST(request: Request) {
         },
       });
 
-      console.log("[/api/ai/background-remove] ImageVersion saved — done");
       return NextResponse.json({ resultUrl: uploaded.secureUrl });
 
     } catch (innerErr) {
       // ── Refund credit on processing failure ───────────────────────────────
-      console.error("[/api/ai/background-remove] Processing error:", innerErr);
-      if (innerErr instanceof Error) {
-        console.error("  message:", innerErr.message);
-        console.error("  stack  :", innerErr.stack);
-        // Replicate SDK errors carry extra fields
-        const anyErr = innerErr as Record<string, unknown>;
-        if ("status" in anyErr) console.error("  status :", anyErr.status);
-        if ("detail" in anyErr) console.error("  detail :", anyErr.detail);
-      }
+      console.error("[/api/ai/background-remove]", innerErr);
 
       await prisma.user.update({
         where: { id: user.id },
@@ -175,8 +144,7 @@ export async function POST(request: Request) {
     }
 
   } catch (outerErr) {
-    // Catches auth(), request.json(), or Prisma errors before credit deduction
-    console.error("[/api/ai/background-remove] Outer error (before credit deducted):", outerErr);
+    console.error("[/api/ai/background-remove] Unexpected error:", outerErr);
     const message = outerErr instanceof Error ? outerErr.message : String(outerErr);
     return NextResponse.json(
       { error: "Internal server error", detail: message },
