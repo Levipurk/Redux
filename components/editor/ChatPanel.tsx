@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp, Minus, Paperclip, X } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Adjustments } from "@/hooks/useEditor";
@@ -20,7 +20,7 @@ interface Message {
 }
 
 type SseEvent =
-  | { type: "meta"; dailyRemaining: number }
+  | { type: "meta"; lifetimeFreeRemaining: number; creditBalanceAfter: number }
   | { type: "text"; text: string }
   | { type: "adjustments"; adjustments: Partial<Record<AdjustmentKey, number>> }
   | { type: "done" };
@@ -82,12 +82,45 @@ export default function ChatPanel({
   const [attachedBase64, setAttachedBase64] = useState<string | null>(null);
   const [attachedMediaType, setAttachedMediaType] = useState<string | null>(null);
 
-  // Daily free messages remaining (populated from SSE meta event; null = credit user)
-  const [dailyRemaining, setDailyRemaining] = useState<number | null>(null);
+  /** Lifetime free messages left (0–20) and credits after last server sync. */
+  const [lifetimeFreeRemaining, setLifetimeFreeRemaining] = useState<number | null>(null);
+  const [creditBalance, setCreditBalance] = useState<number | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const refreshChatQuota = useCallback(() => {
+    void fetch("/api/credits")
+      .then((r) => r.json())
+      .then(
+        (data: { creditBalance?: number; lifetimeFreeAI?: number }) => {
+          if (typeof data.creditBalance !== "number" || typeof data.lifetimeFreeAI !== "number") {
+            return;
+          }
+          setCreditBalance(data.creditBalance);
+          setLifetimeFreeRemaining(Math.max(0, 20 - data.lifetimeFreeAI));
+        },
+      )
+      .catch(() => {});
+  }, []);
+
+  // Load quota before first message; refresh when user returns (e.g. after buying credits)
+  useEffect(() => {
+    refreshChatQuota();
+    function onVisibility() {
+      if (document.visibilityState === "visible") refreshChatQuota();
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [refreshChatQuota]);
+
+  /** Hard block only when lifetime free is exhausted and balance is exactly zero. */
+  const chatBlocked =
+    lifetimeFreeRemaining !== null &&
+    creditBalance !== null &&
+    lifetimeFreeRemaining === 0 &&
+    creditBalance === 0;
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -123,7 +156,7 @@ export default function ChatPanel({
   // ── Send message ────────────────────────────────────────────────────────
   async function handleSend() {
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text || sending || chatBlocked) return;
 
     const imagePreview = attachedPreview ?? undefined;
     const imageBase64 = attachedBase64 ?? undefined;
@@ -166,32 +199,10 @@ export default function ChatPanel({
       });
 
       if (res.status === 429) {
-        const data = (await res.json()) as { error?: string };
-        const isDaily = data.error?.toLowerCase().includes("daily");
-        if (isDaily) {
-          toast.custom(
-            (t) => (
-              <div
-                className={`flex items-center gap-3 px-4 py-3 rounded-sm border border-[#2a2a2a] bg-[#1a1a1a] text-[#e5e5e5] text-[13px] shadow-lg transition-opacity ${t.visible ? "opacity-100" : "opacity-0"}`}
-              >
-                <span>Daily free limit reached.</span>
-                <a
-                  href="/settings"
-                  className="text-white underline underline-offset-2 font-medium whitespace-nowrap"
-                  onClick={() => toast.dismiss(t.id)}
-                >
-                  Get credits →
-                </a>
-              </div>
-            ),
-            { duration: 5000 },
-          );
-        } else {
-          toast("Too many requests. Please slow down.", {
-            icon: "⏱",
-            style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
-          });
-        }
+        toast("Too many requests. Please slow down.", {
+          icon: "⏱",
+          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+        });
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
         return;
       }
@@ -247,7 +258,8 @@ export default function ChatPanel({
           }
 
           if (event.type === "meta") {
-            setDailyRemaining(event.dailyRemaining);
+            setLifetimeFreeRemaining(event.lifetimeFreeRemaining);
+            setCreditBalance(event.creditBalanceAfter);
           } else if (event.type === "text") {
             setMessages((prev) =>
               prev.map((m) =>
@@ -273,6 +285,7 @@ export default function ChatPanel({
       );
     } finally {
       setSending(false);
+      refreshChatQuota();
     }
   }
 
@@ -380,12 +393,26 @@ export default function ChatPanel({
         </div>
       )}
 
-      {/* Daily free messages counter — only shown for free-tier users */}
-      {dailyRemaining !== null && dailyRemaining >= 0 && (
-        <div className="px-4 pb-1">
-          <p className="text-[11px] text-[#444444]">
-            {dailyRemaining} of 10 free message{dailyRemaining !== 1 ? "s" : ""} remaining today
-          </p>
+      {/* Lifetime free tier + exhausted state */}
+      {lifetimeFreeRemaining !== null && creditBalance !== null && (
+        <div className="px-4 pb-1 space-y-0.5">
+          {lifetimeFreeRemaining > 0 ? (
+            <p className="text-[11px] text-[#444444]">
+              {lifetimeFreeRemaining} of 20 free message{lifetimeFreeRemaining !== 1 ? "s" : ""}{" "}
+              remaining
+            </p>
+          ) : creditBalance === 0 ? (
+            <p className="text-[11px] text-[#666666] leading-snug">
+              Free messages used.{" "}
+              <a
+                href="/settings"
+                className="text-[#a3a3a3] underline underline-offset-2 hover:text-white"
+              >
+                Purchase credits
+              </a>{" "}
+              to continue chatting.
+            </p>
+          ) : null}
         </div>
       )}
 
@@ -394,9 +421,11 @@ export default function ChatPanel({
         <div className="flex items-end gap-[8px] bg-[#111111] border border-[#2a2a2a] rounded-sm px-3 py-[8px]">
           {/* Paperclip */}
           <button
+            type="button"
             onClick={() => fileInputRef.current?.click()}
             title="Attach reference image"
-            className="shrink-0 text-[#555555] hover:text-[#888888] transition-colors self-end pb-[1px]"
+            disabled={chatBlocked}
+            className="shrink-0 text-[#555555] hover:text-[#888888] transition-colors self-end pb-[1px] disabled:opacity-40 disabled:pointer-events-none"
           >
             <Paperclip size={15} strokeWidth={1.5} />
           </button>
@@ -414,16 +443,21 @@ export default function ChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Describe the edits you want or ask for help..."
+            placeholder={
+              chatBlocked
+                ? "Purchase credits to continue chatting…"
+                : "Describe the edits you want or ask for help..."
+            }
             rows={1}
-            className="flex-1 resize-none bg-transparent text-[13px] text-white placeholder:text-[#555555] outline-none leading-relaxed min-h-[20px] max-h-[80px] overflow-y-auto"
+            disabled={chatBlocked}
+            className="flex-1 resize-none bg-transparent text-[13px] text-white placeholder:text-[#555555] outline-none leading-relaxed min-h-[20px] max-h-[80px] overflow-y-auto disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ fieldSizing: "content" } as React.CSSProperties}
           />
 
           {/* Send */}
           <button
             onClick={() => { void handleSend(); }}
-            disabled={!input.trim() || sending}
+            disabled={!input.trim() || sending || chatBlocked}
             title="Send"
             className="shrink-0 flex items-center justify-center w-[24px] h-[24px] rounded-full bg-white text-black hover:bg-[#e5e5e5] transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer self-end"
           >

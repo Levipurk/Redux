@@ -10,12 +10,15 @@ export async function GET() {
 
   const user = await prisma.user.findUnique({
     where: { clerkId },
-    select: { creditBalance: true },
+    select: { creditBalance: true, lifetimeFreeAI: true },
   });
 
   if (!user) {
-    return NextResponse.json({ creditBalance: 0 });
+    return NextResponse.json({ creditBalance: 0, lifetimeFreeAI: 0 });
   }
 
-  return NextResponse.json({ creditBalance: user.creditBalance });
+  return NextResponse.json({
+    creditBalance: user.creditBalance,
+    lifetimeFreeAI: user.lifetimeFreeAI,
+  });
 }

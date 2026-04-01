@@ -32,31 +32,3 @@ export async function checkRateLimit(
     return { allowed: true, remaining: limit };
   }
 }
-
-/**
- * Daily limit keyed per user + feature + calendar date (UTC).
- * Key: daily:{feature}:{userId}:{YYYY-MM-DD}  TTL: 86400 s
- *
- * Falls back to "allowed" when Vercel KV is not configured (local dev).
- */
-export async function checkDailyLimit(
-  userId: string,
-  feature: string,
-  dailyLimit: number,
-): Promise<RateLimitResult> {
-  if (!process.env.KV_REST_API_URL) {
-    return { allowed: true, remaining: dailyLimit };
-  }
-
-  try {
-    const date = new Date().toISOString().split("T")[0]; // YYYY-MM-DD UTC
-    const key = `daily:${feature}:${userId}:${date}`;
-    const count = await kv.incr(key);
-    if (count === 1) {
-      await kv.expire(key, 86400);
-    }
-    return { allowed: count <= dailyLimit, remaining: Math.max(0, dailyLimit - count) };
-  } catch {
-    return { allowed: true, remaining: dailyLimit };
-  }
-}

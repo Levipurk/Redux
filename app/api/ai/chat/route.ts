@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import type { ImageBlockParam, TextBlockParam } from "@anthropic-ai/sdk/resources";
 import { anthropic, formatAdjustmentsForPrompt } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
-import { checkRateLimit, checkDailyLimit } from "@/lib/kv";
+import { checkRateLimit } from "@/lib/kv";
 import type { AdjustmentKey } from "@/constants/adjustments";
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ Rules:
 // SSE helpers
 // ---------------------------------------------------------------------------
 type SseEvent =
-  | { type: "meta"; dailyRemaining: number }
+  | { type: "meta"; lifetimeFreeRemaining: number; creditBalanceAfter: number }
   | { type: "text"; text: string }
   | { type: "adjustments"; adjustments: Partial<Record<AdjustmentKey, number>> }
   | { type: "done" };
@@ -42,7 +42,6 @@ function encodeEvent(data: SseEvent): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-const FREE_DAILY_LIMIT = 10;
 const FREE_HOURLY_LIMIT = 10;
 const CREDIT_HOURLY_LIMIT = 60;
 
@@ -75,20 +74,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const isFreeUser = user.lifetimeFreeAI < 20;
+  // ── Block only when lifetime free is used up AND there are no credits left.
+  // While lifetimeFreeAI < 20, messages are free (lifetime counter increments).
+  // Once lifetimeFreeAI reaches 20, each message deducts 1 credit with no extra step.
+  if (user.lifetimeFreeAI >= 20 && user.creditBalance === 0) {
+    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+  }
 
-  // ── Rate limiting ─────────────────────────────────────────────────────────
-  if (isFreeUser) {
-    // Daily cap (10 messages/day) — checked before the hourly window
-    const daily = await checkDailyLimit(user.id, "chat", FREE_DAILY_LIMIT);
-    if (!daily.allowed) {
-      return NextResponse.json(
-        { error: "Daily free message limit reached. Upgrade to continue." },
-        { status: 429 },
-      );
-    }
+  /** True while the user still has lifetime free messages (before the 21st send). */
+  const onFreeTier = user.lifetimeFreeAI < 20;
 
-    // Hourly window for free users (10/hr)
+  // ── Hourly rate limiting ─────────────────────────────────────────────────
+  if (onFreeTier) {
     const hourly = await checkRateLimit(user.id, "chat_free", FREE_HOURLY_LIMIT);
     if (!hourly.allowed) {
       return NextResponse.json(
@@ -96,12 +93,7 @@ export async function POST(request: Request) {
         { status: 429 },
       );
     }
-
-    // dailyRemaining reflects how many messages the user still has today
-    // after this one (already counted by checkDailyLimit's incr above).
-    var dailyRemaining = daily.remaining; // eslint-disable-line no-var
   } else {
-    // Credit users get a higher hourly window (60/hr)
     const hourly = await checkRateLimit(user.id, "chat_credit", CREDIT_HOURLY_LIMIT);
     if (!hourly.allowed) {
       return NextResponse.json(
@@ -109,21 +101,24 @@ export async function POST(request: Request) {
         { status: 429 },
       );
     }
-    var dailyRemaining = 0; // eslint-disable-line no-var
   }
 
-  // ── Credit / free-message gate ────────────────────────────────────────────
-  let freeRemaining: number;
+  // ── Consume free message or credit ───────────────────────────────────────
+  let lifetimeFreeRemaining: number;
+  let creditBalanceAfter: number;
 
-  if (isFreeUser) {
+  if (onFreeTier) {
     await prisma.user.update({
       where: { id: user.id },
       data: { lifetimeFreeAI: { increment: 1 } },
     });
-    freeRemaining = Math.max(0, 19 - user.lifetimeFreeAI);
-  } else if (user.creditBalance < 1) {
-    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+    lifetimeFreeRemaining = Math.max(0, 20 - (user.lifetimeFreeAI + 1));
+    creditBalanceAfter = user.creditBalance;
   } else {
+    // Paid path: lifetime free already exhausted — charge 1 credit per message.
+    if (user.creditBalance < 1) {
+      return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+    }
     await prisma.user.update({
       where: { id: user.id },
       data: { creditBalance: { decrement: 1 } },
@@ -136,12 +131,9 @@ export async function POST(request: Request) {
         feature: "chat_message",
       },
     });
-    freeRemaining = 0;
+    lifetimeFreeRemaining = 0;
+    creditBalanceAfter = user.creditBalance - 1;
   }
-
-  // Suppress unused-variable lint — freeRemaining is used below inside the
-  // ReadableStream closure where re-declaration isn't possible.
-  void freeRemaining;
 
   // ── Build Anthropic message content ───────────────────────────────────────
   const adjustmentsContext = formatAdjustmentsForPrompt(
@@ -152,7 +144,7 @@ export async function POST(request: Request) {
 
   if (imageBase64 && imageMediaType) {
     const validMediaTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
-    type ValidMediaType = typeof validMediaTypes[number];
+    type ValidMediaType = (typeof validMediaTypes)[number];
     const media = validMediaTypes.includes(imageMediaType as ValidMediaType)
       ? (imageMediaType as ValidMediaType)
       : "image/jpeg";
@@ -171,8 +163,9 @@ export async function POST(request: Request) {
   // ── Stream response ───────────────────────────────────────────────────────
   const stream = new ReadableStream({
     async start(controller) {
-      // Send daily remaining so the client can update its counter
-      controller.enqueue(encodeEvent({ type: "meta", dailyRemaining }));
+      controller.enqueue(
+        encodeEvent({ type: "meta", lifetimeFreeRemaining, creditBalanceAfter }),
+      );
 
       let fullText = "";
 
