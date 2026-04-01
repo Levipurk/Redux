@@ -15,6 +15,9 @@ interface ExportModalProps {
   imageId?: string;
   filename?: string;
   adjustments: Adjustments;
+  /** The URL of the image currently on the canvas — may differ from the
+   *  original if an AI operation (e.g. background removal) replaced it. */
+  activeImageUrl?: string | null;
 }
 
 function formatBytes(bytes: number): string {
@@ -36,6 +39,7 @@ export default function ExportModal({
   imageId,
   filename,
   adjustments,
+  activeImageUrl,
 }: ExportModalProps) {
   const [format, setFormat] = useState<ExportFormat>("jpeg");
   const [quality, setQuality] = useState(90);
@@ -51,7 +55,16 @@ export default function ExportModal({
       const res = await fetch("/api/images/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageId, adjustments, format, quality }),
+        body: JSON.stringify({
+          imageId,
+          adjustments,
+          format,
+          quality,
+          // Pass the active canvas URL so the API processes whatever is
+          // currently on the canvas (e.g. background-removed version) rather
+          // than always fetching the original from Cloudinary.
+          imageUrl: activeImageUrl ?? undefined,
+        }),
       });
 
       if (!res.ok) {

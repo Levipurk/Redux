@@ -106,6 +106,10 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
   // Tracks the rendered bounds of the background image inside the Fabric canvas.
   // Used by Canvas.tsx to clip the vignette/grain overlays to the image area.
   const [imageBounds, setImageBounds] = useState<ImageBounds | null>(null);
+  // The URL of the image currently rendered on the canvas. Starts as imageUrl
+  // prop but can diverge after AI operations (e.g. background removal) that
+  // replace the canvas image with a new URL via loadImageUrl().
+  const [activeImageUrl, setActiveImageUrl] = useState<string | null>(imageUrl);
 
   // ---------------------------------------------------------------------------
   // Compute the image's rendered bounds from the current FabricImage state.
@@ -286,6 +290,14 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
       eventCleanupRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------------------------------------------------------------------------
+  // Keep activeImageUrl in sync with the imageUrl prop.
+  // When the user navigates to a different image, reset to the new original URL.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    setActiveImageUrl(imageUrl);
+  }, [imageUrl]);
 
   // ---------------------------------------------------------------------------
   // Load background image
@@ -534,6 +546,43 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
   }, []);
 
   // ---------------------------------------------------------------------------
+  // Imperative image loader — called after AI operations (e.g. background
+  // removal) that return a new URL to replace the current canvas image.
+  // Mirrors the prop-driven useEffect but works on demand without waiting
+  // for React to re-render with a new imageUrl prop.
+  // ---------------------------------------------------------------------------
+  const loadImageUrl = useCallback(async (url: string) => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+
+    const { FabricImage } = await import("fabric");
+    const img = await FabricImage.fromURL(url, { crossOrigin: "anonymous" });
+
+    const w = canvas.getWidth();
+    const h = canvas.getHeight();
+    const scale = Math.min(w / (img.width ?? w), h / (img.height ?? h)) * 0.95;
+    const { rotation, flipX, flipY, straighten } = transformRef.current;
+
+    img.set({
+      scaleX: scale,
+      scaleY: scale,
+      originX: "center",
+      originY: "center",
+      left: w / 2,
+      top: h / 2,
+      angle: rotation + straighten,
+      flipX,
+      flipY,
+    });
+
+    bgImageRef.current = img;
+    canvas.backgroundImage = img as unknown as import("fabric").FabricObject;
+    canvas.renderAll();
+    updateImageBounds();
+    setActiveImageUrl(url);
+  }, [updateImageBounds]);
+
+  // ---------------------------------------------------------------------------
   // Resize canvas + re-fit background image
   // ---------------------------------------------------------------------------
   const resizeCanvas = useCallback((newW: number, newH: number) => {
@@ -571,6 +620,8 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
     confirmCrop,
     cancelCrop,
     resizeCanvas,
+    loadImageUrl,
+    activeImageUrl,
     viewportTransform,
   };
 }

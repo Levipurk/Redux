@@ -9,6 +9,9 @@ interface ExportBody {
   adjustments?: Record<string, number>;
   format?: ExportFormat;
   quality?: number;
+  /** Active canvas URL — overrides the DB original when the image has been
+   *  replaced by an AI operation (e.g. background removal). */
+  imageUrl?: string;
 }
 
 const FORMAT_MIME: Record<ExportFormat, string> = {
@@ -29,7 +32,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = (await request.json()) as ExportBody;
-  const { imageId, adjustments = {}, format = "jpeg", quality = 90 } = body;
+  const { imageId, adjustments = {}, format = "jpeg", quality = 90, imageUrl } = body;
 
   if (!imageId) {
     return NextResponse.json({ error: "imageId is required" }, { status: 400 });
@@ -42,11 +45,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Image not found" }, { status: 404 });
   }
 
-  // Fetch the original image from Cloudinary
-  const imgResponse = await fetch(image.originalUrl);
+  // Use the provided active canvas URL when available (e.g. after background
+  // removal the canvas shows a different image than the DB original).
+  // Fall back to the stored original URL.
+  const fetchUrl = imageUrl ?? image.originalUrl;
+  const imgResponse = await fetch(fetchUrl);
   if (!imgResponse.ok) {
     return NextResponse.json(
-      { error: "Failed to fetch original image" },
+      { error: "Failed to fetch image" },
       { status: 502 },
     );
   }
@@ -111,10 +117,17 @@ export async function POST(request: NextRequest) {
   // Format and quality
   let outputBuffer: Buffer;
   if (format === "jpeg") {
-    outputBuffer = await pipeline.jpeg({ quality: Math.min(100, Math.max(1, quality)) }).toBuffer();
+    // JPEG does not support transparency — flatten against white before encoding
+    outputBuffer = await pipeline
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .jpeg({ quality: Math.min(100, Math.max(1, quality)) })
+      .toBuffer();
   } else if (format === "png") {
-    outputBuffer = await pipeline.png({ compressionLevel: 7 }).toBuffer();
+    // compressionLevel: 9 = maximum lossless compression; alpha channel is
+    // preserved automatically by Sharp when the input has transparency.
+    outputBuffer = await pipeline.png({ compressionLevel: 9 }).toBuffer();
   } else {
+    // TIFF supports alpha — pass through without flattening
     outputBuffer = await pipeline.tiff({ compression: "lzw" }).toBuffer();
   }
 

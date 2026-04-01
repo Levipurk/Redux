@@ -71,6 +71,8 @@ export default function EditorApp() {
     confirmCrop,
     cancelCrop,
     resizeCanvas,
+    loadImageUrl,
+    activeImageUrl,
   } = useCanvas(image?.originalUrl ?? null, adjustments);
 
   return (
@@ -112,6 +114,7 @@ export default function EditorApp() {
           onRotateCW={rotateCW}
           onStraighten={straightenImage}
           onResize={resizeCanvas}
+          onReloadCanvas={loadImageUrl}
         />
 
         {/* Canvas must always be rendered — never conditionally unmount it.
@@ -153,6 +156,7 @@ export default function EditorApp() {
         imageId={imageId}
         filename={image?.filename}
         adjustments={adjustments}
+        activeImageUrl={activeImageUrl}
       />
 
     </div>

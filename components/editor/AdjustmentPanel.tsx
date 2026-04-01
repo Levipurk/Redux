@@ -20,6 +20,8 @@ interface AdjustmentPanelProps {
   onRotateCW?: () => void;
   onStraighten?: (degrees: number) => void;
   onResize?: (width: number, height: number) => void;
+  /** Called with the new URL after an AI operation replaces the canvas image. */
+  onReloadCanvas?: (url: string) => void;
 }
 
 interface SectionState {
@@ -149,6 +151,7 @@ export default function AdjustmentPanel({
   onRotateCW,
   onStraighten,
   onResize,
+  onReloadCanvas,
 }: AdjustmentPanelProps) {
   const [sections, setSections] = useState<SectionState>({
     light: true,
@@ -323,6 +326,41 @@ export default function AdjustmentPanel({
       });
     } finally {
       setLoadingSmartColor(false);
+    }
+  }
+
+  // ── Remove Background ─────────────────────────────────────────────────────
+  async function runRemoveBackground() {
+    if (!imageUrl || !imageId) return;
+    setLoadingRemoveBg(true);
+    try {
+      const res = await fetch("/api/ai/background-remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl, imageId }),
+      });
+      if (res.status === 402) {
+        toast("Insufficient credits — purchase more to continue.", {
+          icon: "💳",
+          style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+        });
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { resultUrl?: string };
+      if (data.resultUrl) {
+        onReloadCanvas?.(data.resultUrl);
+      }
+      toast.success("Background removed successfully", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+    } catch (err) {
+      console.error("[AdjustmentPanel] remove_background failed:", err);
+      toast.error("Background removal failed", {
+        style: { background: "#1a1a1a", color: "#e5e5e5", border: "1px solid #2a2a2a" },
+      });
+    } finally {
+      setLoadingRemoveBg(false);
     }
   }
 
@@ -595,8 +633,8 @@ export default function AdjustmentPanel({
             <AIButton
               label="Remove Background"
               loading={loadingRemoveBg}
-              disabled={!imageUrl}
-              onClick={() => void callRetouch("remove_background", setLoadingRemoveBg)}
+              disabled={!imageUrl || !imageId}
+              onClick={() => void runRemoveBackground()}
             />
           </div>
         )}
