@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2, Minus, ChevronDown, Star, Lock, Unlock } from "lucide-react";
 import toast from "react-hot-toast";
 import AdjustmentSlider from "./AdjustmentSlider";
@@ -22,6 +22,11 @@ interface AdjustmentPanelProps {
   onResize?: (width: number, height: number) => void;
   /** Called with the new URL after an AI operation replaces the canvas image. */
   onReloadCanvas?: (url: string) => void;
+  /** Active canvas image URL (may differ from library original after AI edits). */
+  canvasImageUrl?: string | null;
+  enableHealBrush?: () => void | Promise<void>;
+  disableHealBrush?: () => void;
+  exportHealMask?: () => Promise<string>;
 }
 
 interface SectionState {
@@ -120,20 +125,26 @@ function AIButton({
 function ToolBtn({
   label,
   active,
+  disabled,
   onClick,
 }: {
-  label: string;
+  label: ReactNode;
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
+      disabled={disabled}
       className={[
-        "flex items-center justify-center h-[34px] border rounded-sm text-[13px] capitalize transition-colors cursor-pointer",
-        active
-          ? "bg-white text-black border-white"
-          : "bg-[#1a1a1a] text-white border-[#2a2a2a] hover:bg-[#222222]",
+        "flex items-center justify-center h-[34px] border rounded-sm text-[13px] capitalize transition-colors",
+        disabled
+          ? "opacity-40 cursor-not-allowed bg-[#1a1a1a] text-[#888888] border-[#2a2a2a]"
+          : active
+            ? "bg-white text-black border-white cursor-pointer"
+            : "bg-[#1a1a1a] text-white border-[#2a2a2a] hover:bg-[#222222] cursor-pointer",
       ].join(" ")}
     >
       {label}
@@ -172,6 +183,10 @@ export default function AdjustmentPanel({
   onStraighten,
   onResize,
   onReloadCanvas,
+  canvasImageUrl,
+  enableHealBrush,
+  disableHealBrush,
+  exportHealMask,
 }: AdjustmentPanelProps) {
   const [sections, setSections] = useState<SectionState>({
     light: true,
@@ -231,6 +246,19 @@ export default function AdjustmentPanel({
   const styleMatchInputRef = useRef<HTMLInputElement>(null);
   const [loadingGenFill, setLoadingGenFill] = useState(false);
   const [loadingRemoveBg, setLoadingRemoveBg] = useState(false);
+  const [loadingHeal, setLoadingHeal] = useState(false);
+
+  const prevActiveToolRef = useRef<ActiveTool>(null);
+  useEffect(() => {
+    const prev = prevActiveToolRef.current;
+    if (activeTool === "heal" && prev !== "heal") {
+      void enableHealBrush?.();
+    }
+    if (activeTool !== "heal" && prev === "heal") {
+      disableHealBrush?.();
+    }
+    prevActiveToolRef.current = activeTool;
+  }, [activeTool, enableHealBrush, disableHealBrush]);
 
   function toggleSection(key: keyof SectionState) {
     setSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -439,6 +467,64 @@ export default function AdjustmentPanel({
     }
   }
 
+  // ── Heal (inpainting) ─────────────────────────────────────────────────────
+  async function confirmHeal() {
+    if (!canvasImageUrl || !imageId || !exportHealMask) return;
+    const darkStyle = {
+      background: "#1a1a1a",
+      color: "#e5e5e5",
+      border: "1px solid #2a2a2a",
+    };
+    setLoadingHeal(true);
+    try {
+      let maskBase64: string;
+      try {
+        maskBase64 = await exportHealMask();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Could not export mask";
+        toast.error(msg, { style: darkStyle });
+        return;
+      }
+      const res = await fetch("/api/ai/heal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageUrl: canvasImageUrl,
+          maskBase64,
+          imageId,
+        }),
+      });
+      if (res.status === 402) {
+        toast("Insufficient credits", { icon: "💳", style: darkStyle });
+        return;
+      }
+      if (res.status === 429) {
+        toast("Rate limit exceeded", { icon: "⏱", style: darkStyle });
+        return;
+      }
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(errBody.detail ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { resultUrl?: string };
+      if (data.resultUrl) {
+        onReloadCanvas?.(data.resultUrl);
+      }
+      toast.success("Heal applied successfully", { style: darkStyle });
+      disableHealBrush?.();
+      setActiveTool(null);
+    } catch (err) {
+      console.error("[AdjustmentPanel] heal failed:", err);
+      toast.error("Heal failed", { style: darkStyle });
+    } finally {
+      setLoadingHeal(false);
+    }
+  }
+
+  function cancelHeal() {
+    setActiveTool(null);
+  }
+
   // ── Generic placeholder for unimplemented AI features ─────────────────────
   async function callRetouch(
     mode: string,
@@ -591,16 +677,59 @@ export default function AdjustmentPanel({
             {/* Row 1: Heal | Blur */}
             <div className="grid grid-cols-2 gap-[7px]">
               <ToolBtn
-                label="Heal"
+                label={
+                  loadingHeal ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Loader2 size={14} className="animate-spin shrink-0" />
+                      Working…
+                    </span>
+                  ) : (
+                    "Heal"
+                  )
+                }
                 active={activeTool === "heal"}
+                disabled={!canvasImageUrl || loadingHeal}
                 onClick={() => toggleTool("heal")}
               />
               <ToolBtn
                 label="Blur"
                 active={activeTool === "blur"}
+                disabled={loadingHeal}
                 onClick={() => toggleTool("blur")}
               />
             </div>
+            {activeTool === "heal" && (
+              <div className="flex flex-col gap-2">
+                <p className="text-[10px] text-[#555555] leading-snug">
+                  Paint over the area to heal in red, then confirm.
+                </p>
+                <div className="flex gap-[7px]">
+                  <button
+                    type="button"
+                    onClick={cancelHeal}
+                    disabled={loadingHeal}
+                    className="flex-1 h-[34px] bg-[#1a1a1a] border border-[#2a2a2a] rounded-sm text-[13px] text-white hover:bg-[#222222] transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmHeal()}
+                    disabled={loadingHeal}
+                    className="flex-1 h-[34px] bg-white rounded-sm text-[13px] text-black font-medium hover:bg-[#e5e5e5] transition-colors cursor-pointer disabled:opacity-40 inline-flex items-center justify-center gap-2"
+                  >
+                    {loadingHeal ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        Processing…
+                      </>
+                    ) : (
+                      "Confirm"
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
             {/* Row 2: Eraser (first column only) */}
             <div className="grid grid-cols-2 gap-[7px]">
               <ToolBtn

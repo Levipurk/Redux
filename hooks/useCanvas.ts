@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Canvas, FabricImage, Point as FabricPoint } from "fabric";
+import type { Canvas, FabricImage, FabricObject, Point as FabricPoint } from "fabric";
 import type { AdjustmentKey } from "@/constants/adjustments";
 
 export type CanvasAdjustments = Record<AdjustmentKey, number>;
@@ -103,6 +103,7 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
   const [showBefore, setShowBefore] = useState(false);
   const [canvasReady, setCanvasReady] = useState(false);
   const [isCropping, setIsCropping] = useState(false);
+  const [isHealBrush, setIsHealBrush] = useState(false);
   // Tracks the rendered bounds of the background image inside the Fabric canvas.
   // Used by Canvas.tsx to clip the vignette/grain overlays to the image area.
   const [imageBounds, setImageBounds] = useState<ImageBounds | null>(null);
@@ -156,6 +157,8 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
   // Stores the DOM event listener teardown so it can be called from the
   // useEffect cleanup even though the listeners are added inside an async block.
   const eventCleanupRef = useRef<(() => void) | null>(null);
+  const healPathsRef = useRef<FabricObject[]>([]);
+  const healPathHandlerRef = useRef<((e: { path: FabricObject }) => void) | null>(null);
 
   // ---------------------------------------------------------------------------
   // Initialize Fabric canvas
@@ -228,6 +231,8 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
       const handlePointerDown = (e: PointerEvent) => {
         // Crop mode: let Fabric handle its interactive rect
         if (canvas.selection) return;
+        // Heal brush / free drawing: let Fabric handle strokes
+        if (canvas.isDrawingMode) return;
         if (e.button !== 0 && e.button !== 1) return;
         isPanning = true;
         panLastX = e.clientX;
@@ -281,11 +286,14 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
 
     return () => {
       disposed = true;
+      healPathHandlerRef.current = null;
+      healPathsRef.current = [];
       fabricRef.current?.dispose();
       fabricRef.current = null;
       bgImageRef.current = null;
       setCanvasReady(false);
       setImageBounds(null);
+      setIsHealBrush(false);
       eventCleanupRef.current?.();
       eventCleanupRef.current = null;
     };
@@ -600,12 +608,137 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
     }
   }, [updateImageBounds]);
 
+  // ---------------------------------------------------------------------------
+  // Heal brush — free drawing in red; export mask aligned to image pixels
+  // ---------------------------------------------------------------------------
+  const enableHealBrush = useCallback(async () => {
+    const canvas = fabricRef.current;
+    if (!canvas || !bgImageRef.current) return;
+
+    const { PencilBrush } = await import("fabric");
+
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    canvas.requestRenderAll();
+    setZoom(1);
+    setViewportTransform([1, 0, 0, 1, 0, 0]);
+
+    if (healPathHandlerRef.current) {
+      canvas.off("path:created", healPathHandlerRef.current);
+      healPathHandlerRef.current = null;
+    }
+    for (const p of healPathsRef.current) {
+      try {
+        canvas.remove(p);
+      } catch {
+        /* ignore */
+      }
+    }
+    healPathsRef.current = [];
+
+    const onPathCreated = (e: { path: FabricObject }) => {
+      healPathsRef.current.push(e.path);
+    };
+    canvas.on("path:created", onPathCreated);
+    healPathHandlerRef.current = onPathCreated;
+
+    const brush = new PencilBrush(canvas);
+    brush.color = "rgba(255, 0, 0, 0.5)";
+    brush.width = 20;
+    canvas.freeDrawingBrush = brush;
+    canvas.isDrawingMode = true;
+    canvas.selection = false;
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    setIsHealBrush(true);
+  }, []);
+
+  const disableHealBrush = useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+
+    canvas.isDrawingMode = false;
+    if (healPathHandlerRef.current) {
+      canvas.off("path:created", healPathHandlerRef.current);
+      healPathHandlerRef.current = null;
+    }
+    for (const p of healPathsRef.current) {
+      try {
+        canvas.remove(p);
+      } catch {
+        /* ignore */
+      }
+    }
+    healPathsRef.current = [];
+    canvas.requestRenderAll();
+    setIsHealBrush(false);
+  }, []);
+
+  const exportMask = useCallback(async (): Promise<string> => {
+    const canvas = fabricRef.current;
+    const img = bgImageRef.current;
+    if (!canvas || !img) {
+      throw new Error("Canvas not ready");
+    }
+    const paths = healPathsRef.current;
+    if (paths.length === 0) {
+      throw new Error("Paint over the area to heal first");
+    }
+
+    const nw = img.width ?? 1;
+    const nh = img.height ?? 1;
+    const cw = canvas.getWidth();
+    const ch = canvas.getHeight();
+    const br = img.getBoundingRect();
+
+    const { StaticCanvas } = await import("fabric");
+    const el = document.createElement("canvas");
+    el.width = cw;
+    el.height = ch;
+    const tmp = new StaticCanvas(el, {
+      width: cw,
+      height: ch,
+      backgroundColor: "#000000",
+    });
+
+    for (const p of paths) {
+      const cloned = await p.clone();
+      cloned.set({ stroke: "#ffffff", fill: "", opacity: 1 });
+      tmp.add(cloned);
+    }
+    tmp.renderAll();
+    const fullMaskDataUrl = tmp.toDataURL({ format: "png", multiplier: 1 });
+    tmp.dispose();
+
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = nw;
+    maskCanvas.height = nh;
+    const ctx = maskCanvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Could not get 2d context");
+    }
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, nw, nh);
+
+    const bitmap = new Image();
+    await new Promise<void>((resolve, reject) => {
+      bitmap.onload = () => resolve();
+      bitmap.onerror = () => reject(new Error("Failed to load mask bitmap"));
+      bitmap.src = fullMaskDataUrl;
+    });
+    ctx.drawImage(bitmap, br.left, br.top, br.width, br.height, 0, 0, nw, nh);
+
+    const dataUrl = maskCanvas.toDataURL("image/png");
+    const comma = dataUrl.indexOf(",");
+    return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  }, []);
+
   return {
     canvasRef,
     containerRef,
     zoom,
     showBefore,
     isCropping,
+    isHealBrush,
     imageBounds,
     zoomIn,
     zoomOut,
@@ -623,5 +756,8 @@ export function useCanvas(imageUrl: string | null, adjustments: CanvasAdjustment
     loadImageUrl,
     activeImageUrl,
     viewportTransform,
+    enableHealBrush,
+    disableHealBrush,
+    exportMask,
   };
 }

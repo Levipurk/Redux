@@ -73,6 +73,9 @@ export default function EditorApp() {
     resizeCanvas,
     loadImageUrl,
     activeImageUrl,
+    enableHealBrush,
+    disableHealBrush,
+    exportMask,
   } = useCanvas(image?.originalUrl ?? null, adjustments);
 
   return (
@@ -115,6 +118,10 @@ export default function EditorApp() {
           onStraighten={straightenImage}
           onResize={resizeCanvas}
           onReloadCanvas={loadImageUrl}
+          canvasImageUrl={activeImageUrl ?? image?.originalUrl ?? null}
+          enableHealBrush={enableHealBrush}
+          disableHealBrush={disableHealBrush}
+          exportHealMask={exportMask}
         />
 
         {/* Canvas must always be rendered — never conditionally unmount it.

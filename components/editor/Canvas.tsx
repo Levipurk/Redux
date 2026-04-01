@@ -148,6 +148,7 @@ export default function Canvas({
           </button>
         </div>
       )}
+
     </div>
   );
 }
