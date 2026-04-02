@@ -20,8 +20,20 @@
 # production
 /build
 
-# misc
+# macOS
 .DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+
+# logs & temporary files
+*.log
+logs/
+tmp/
+.temp/
+*.tmp
+
+# misc
 *.pem
 
 # debug
@@ -30,10 +42,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files (local secrets; opt-in if you need to commit a template)
 .env
 .env.local
+.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env*
 
 # vercel
 .vercel
