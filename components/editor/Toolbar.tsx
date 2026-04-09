@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   Minus,
   Plus,
@@ -85,15 +86,17 @@ export default function Toolbar({
   const zoomPercent = `${Math.round(zoom * 100)}%`;
 
   return (
-    <div className="flex items-center justify-between h-[44px] px-4 bg-[#0a0a0a] border-b border-[#2a2a2a] shrink-0">
+    <div className="flex items-center justify-between h-[52px] px-4 bg-[#0a0a0a] border-b border-[#2a2a2a] shrink-0">
       {/* Left — Logo */}
-      <div className="flex items-center gap-2 w-[160px]">
-        <div className="flex items-center justify-center w-[22px] h-[22px] bg-white rounded-sm shrink-0">
-          <span className="text-black text-[11px] font-bold leading-none">r</span>
-        </div>
-        <span className="text-white text-[13px] font-medium tracking-tight">
-          redux
-        </span>
+      <div className="flex items-center w-[160px]">
+        <Image
+          src="/logo.png"
+          alt="Redux"
+          width={52}
+          height={52}
+          className="h-[52px] w-auto object-contain shrink-0"
+          priority
+        />
       </div>
 
       {/* Center — canvas controls */}
