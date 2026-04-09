@@ -34,7 +34,9 @@ export const ourFileRouter = {
       return { userId: user.id };
     })
     .onUploadComplete(() => {
-      // Intentionally empty — processing happens via POST /api/images
+      // Row creation + Cloudinary happen in POST /api/images (client, after upload).
+      // That route runs BLIP → CLIP embedding in the background (same work as POST /api/images/embed).
+      // This webhook has no Prisma image id yet, so embedding cannot start here.
     }),
 } satisfies FileRouter;
 

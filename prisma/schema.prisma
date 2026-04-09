@@ -33,7 +33,8 @@ model Image {
   size        Int
   format      String
   utKey       String?
-  embedding   Float[]
+  /// pgvector column (768 = CLIP ViT-L/14). Managed via $executeRaw / $queryRaw.
+  embedding   Unsupported("vector(768)")?
   metadata    Json?
   versions    ImageVersion[]
   createdAt   DateTime       @default(now())

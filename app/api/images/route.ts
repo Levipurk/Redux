@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { type NextRequest, NextResponse } from "next/server";
 import { UTApi } from "uploadthing/server";
 import { prisma } from "@/lib/prisma";
+import { generateAndPersistImageEmbedding } from "@/lib/image-vector-pipeline";
 
 const utapi = new UTApi({ token: process.env.UPLOADTHING_TOKEN });
 
@@ -82,8 +83,11 @@ export async function POST(request: NextRequest) {
       height,
       size,
       format,
-      embedding: [],
     },
+  });
+
+  void generateAndPersistImageEmbedding(image.id, image.originalUrl, user.id).catch((e) => {
+    console.error("[POST /api/images] Background embedding failed:", e);
   });
 
   return NextResponse.json({ image });
